@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Text,
@@ -91,25 +92,13 @@ export default function LoginIndex() {
         <View className="flex-1 items-center justify-center px-8">
           {/* Logo/Brand Section */}
           <View className="items-center">
-            <View
+            <Image
+              source={require('../../assets/splash.png')}
               style={{
-                width: 144,
-                height: 144,
-                borderRadius: 72,
-                backgroundColor: '#4A9EFF',
-                justifyContent: 'center',
-                alignItems: 'center',
-                marginBottom: 32,
-              }}>
-              <Text
-                style={{
-                  fontSize: 48,
-                  fontWeight: 'bold',
-                  color: 'white',
-                }}>
-                MX
-              </Text>
-            </View>
+                width: 100,
+                height: 100,
+              }}
+            />
           </View>
 
           {/* Login Card */}

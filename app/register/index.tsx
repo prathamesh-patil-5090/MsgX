@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -101,23 +102,14 @@ export default function RegisterIndex() {
           <View className="flex-1 items-center justify-center px-8 py-12">
             {/* Logo/Brand Section */}
             <View className="mb-8 items-center">
-              <View
-                style={{
-                  width: 144,
-                  height: 144,
-                  borderRadius: 72,
-                  backgroundColor: '#4A9EFF',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}>
-                <Text
+              <View className="items-center">
+                <Image
+                  source={require('../../assets/splash.png')}
                   style={{
-                    fontSize: 48,
-                    fontWeight: 'bold',
-                    color: 'white',
-                  }}>
-                  MX
-                </Text>
+                    width: 100,
+                    height: 100,
+                  }}
+                />
               </View>
             </View>
 
