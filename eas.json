@@ -1,0 +1,20 @@
+{
+  "cli": {
+    "version": ">= 16.28.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://chat-app.dev-sandbox.tech"
+      }
+    },
+    "internal": {
+      "distribution": "internal",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://chat-app.dev-sandbox.tech"
+      }
+    }
+  }
+}

@@ -9,7 +9,9 @@
     "experiments": {
       "tsconfigPaths": true
     },
-    "plugins": ["expo-router"],
+    "plugins": [
+      "expo-router"
+    ],
     "orientation": "portrait",
     "icon": "./assets/splash.png",
     "userInterfaceStyle": "light",
@@ -18,7 +20,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true
     },
@@ -28,6 +32,12 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.prathampatil7798.MsgX"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c89644ec-6b39-48d0-a37f-c0cf15c31a75"
+      }
     }
   }
 }

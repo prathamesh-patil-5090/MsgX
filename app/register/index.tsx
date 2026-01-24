@@ -120,7 +120,7 @@ export default function RegisterIndex() {
 
               {/* First Name Input */}
               <View className="flex flex-row gap-5">
-                <View className="mb-6">
+                <View className="w-[47%] mb-6">
                   <Text className="mb-3 text-xs font-semibold uppercase tracking-wider text-white">
                     FIRST NAME
                   </Text>
@@ -137,7 +137,7 @@ export default function RegisterIndex() {
                 </View>
 
                 {/* Last Name Input */}
-                <View className="mb-6">
+                <View className="w-[47%] mb-6">
                   <Text className="mb-3 text-xs font-semibold uppercase tracking-wider text-white">
                     LAST NAME
                   </Text>
