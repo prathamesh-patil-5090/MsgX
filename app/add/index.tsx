@@ -17,7 +17,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { withAuthErrorHandling } from 'services/authUtils';
 import { createConversation } from 'services/conversationsApi';
-import { getAllUsers, searchUsers } from 'services/userApi';
+import {
+  getAllUsers,
+  getCurrentUserProfile,
+  searchUsers,
+  UserProfileResponse,
+  UserSearchResponse,
+} from 'services/userApi';
 import '../../global.css';
 
 interface User {
@@ -40,6 +46,8 @@ export default function SearchUsersScreen() {
   const [loading, setLoading] = useState(false);
   const [loadingAllUsers, setLoadingAllUsers] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Cached current user id (used to filter out current user from lists/search)
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
 
   // Selection and group creation state
   const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
@@ -52,9 +60,45 @@ export default function SearchUsersScreen() {
   const [viewMode, setViewMode] = useState<ViewMode>('browse');
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load all users on mount
+  // Load current profile & all users on mount (inline to avoid effect dependency on loadAllUsers)
   useEffect(() => {
-    loadAllUsers();
+    (async () => {
+      const profile = await withAuthErrorHandling<UserProfileResponse>(async () => {
+        return await getCurrentUserProfile();
+      }, false);
+
+      if (profile) {
+        const idFromProfile = (profile as any)?.id ?? (profile as any)?.user?.id ?? null;
+        setCurrentUserId(idFromProfile != null ? Number(idFromProfile) : null);
+      }
+
+      // Load and filter users (filtering out current user)
+      setLoadingAllUsers(true);
+      setError(null);
+
+      const result = await withAuthErrorHandling(async () => {
+        const responses: UserSearchResponse = await getAllUsers();
+        const idFromProfile = (profile as any)?.id ?? (profile as any)?.user?.id ?? null;
+        const cuId = idFromProfile != null ? Number(idFromProfile) : null;
+        const filteredUsers = (responses.users || []).filter(
+          (response) => Number(response.id) !== cuId
+        );
+
+        return {
+          ...responses,
+          users: filteredUsers,
+          count: filteredUsers.length,
+        } as UserSearchResponse;
+      });
+
+      if (result) {
+        setAllUsers(result.users);
+      } else {
+        setError('Failed to load users.');
+      }
+
+      setLoadingAllUsers(false);
+    })();
   }, []);
 
   const loadAllUsers = async () => {
@@ -62,8 +106,18 @@ export default function SearchUsersScreen() {
     setError(null);
 
     const result = await withAuthErrorHandling(async () => {
-      const response = await getAllUsers();
-      return response;
+      const responses: UserSearchResponse = await getAllUsers();
+      // Try to use cached current user id if available to avoid extra fetch
+      let cuId = currentUserId;
+      if (cuId == null) {
+        const currentUser = await getCurrentUserProfile();
+        const idFromUser = (currentUser as any)?.id ?? (currentUser as any)?.user?.id ?? null;
+        cuId = idFromUser != null ? Number(idFromUser) : null;
+        setCurrentUserId(cuId);
+      }
+      const filteredUsers = responses.users.filter((response) => Number(response.id) !== cuId);
+      // return the full shaped response but with filtered users
+      return { ...responses, users: filteredUsers, count: filteredUsers.length };
     });
 
     if (result) {
@@ -85,8 +139,17 @@ export default function SearchUsersScreen() {
     });
 
     if (result) {
-      setSearchResults(result.users);
-      if (result.users.length === 0) {
+      // Filter out current user (use cached id if available)
+      let cuId = currentUserId;
+      if (cuId == null) {
+        const currentUser = await getCurrentUserProfile();
+        const idFromCurr = (currentUser as any)?.id ?? (currentUser as any)?.user?.id ?? null;
+        cuId = idFromCurr != null ? Number(idFromCurr) : null;
+        setCurrentUserId(cuId);
+      }
+      const filtered = result.users.filter((u) => Number(u.id) !== cuId);
+      setSearchResults(filtered);
+      if (filtered.length === 0) {
         setError(null); // Will show "No Users Found" state
       }
     } else {

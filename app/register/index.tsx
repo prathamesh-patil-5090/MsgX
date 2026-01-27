@@ -91,15 +91,14 @@ export default function RegisterIndex() {
   }, [router]);
 
   return (
-    <SafeAreaView className="flex-1 bg-black" edges={['top', 'bottom']}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        className="flex-1">
+    <SafeAreaView className="flex-1 bg-black">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
         <ScrollView
           contentContainerStyle={{ flexGrow: 1 }}
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled">
-          <View className="flex-1 items-center justify-center px-8 py-12">
+        >
+          <View className="flex-grow items-center justify-center px-8 py-12">
             {/* Logo/Brand Section */}
             <View className="mb-8 items-center">
               <View className="items-center">
@@ -120,7 +119,7 @@ export default function RegisterIndex() {
 
               {/* First Name Input */}
               <View className="flex flex-row gap-5">
-                <View className="w-[47%] mb-6">
+                <View className="mb-6 w-[47%]">
                   <Text className="mb-3 text-xs font-semibold uppercase tracking-wider text-white">
                     FIRST NAME
                   </Text>
@@ -137,7 +136,7 @@ export default function RegisterIndex() {
                 </View>
 
                 {/* Last Name Input */}
-                <View className="w-[47%] mb-6">
+                <View className="mb-6 w-[47%]">
                   <Text className="mb-3 text-xs font-semibold uppercase tracking-wider text-white">
                     LAST NAME
                   </Text>

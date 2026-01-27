@@ -14,9 +14,9 @@ export default function TabsLayout() {
           backgroundColor: '#000000',
           borderTopColor: '#333333',
           borderTopWidth: 1,
-          height: 70 + insets.bottom,
+          height: 55 + insets.bottom,
           paddingBottom: insets.bottom + 10,
-          paddingTop: 10,
+          paddingTop: 0,
         },
         tabBarActiveTintColor: '#ffffff',
         tabBarInactiveTintColor: '#666666',
@@ -26,7 +26,7 @@ export default function TabsLayout() {
           marginBottom: 5,
         },
         tabBarIconStyle: {
-          marginTop: 5,
+          marginTop: 0,
         },
         tabBarItemStyle: {
           justifyContent: 'center',

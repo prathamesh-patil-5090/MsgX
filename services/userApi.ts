@@ -10,13 +10,13 @@ export interface UserSearchResult {
 }
 
 export interface UserSearchResponse {
+  id: number;
   message: string;
   users: UserSearchResult[];
   count: number;
 }
 
 export interface UserProfile {
-  id: number;
   first_name: string;
   last_name: string;
   email: string;
@@ -24,6 +24,7 @@ export interface UserProfile {
 }
 
 export interface UserProfileResponse {
+  id: string;
   message: string;
   user: UserProfile;
 }

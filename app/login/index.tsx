@@ -6,13 +6,12 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-// import AppIcon from '../../assets/splash.png';
 import '../../global.css';
 import { getAccessToken, getRefreshToken, loginApi } from '../../services/loginApi';
 
@@ -85,10 +84,11 @@ export default function LoginIndex() {
   }, [router]);
 
   return (
-    <SafeAreaView className="flex-1 bg-black" edges={['top', 'bottom']}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        className="flex-1">
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={20}
+      className="flex-1">
+      <ScrollView contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
         <View className="flex-1 items-center justify-center px-8">
           {/* Logo/Brand Section */}
           <View className="items-center">
@@ -185,7 +185,7 @@ export default function LoginIndex() {
             <Text className="text-xs text-gray-600">© 2024 MsgX. All rights reserved.</Text>
           </View>
         </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }

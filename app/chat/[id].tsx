@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -31,13 +32,11 @@ import {
 import { websocketService, type WebSocketResponse } from 'services/websocket';
 import '../../global.css';
 
-// Helper to decode JWT and get user ID
 const getUserIdFromToken = async (): Promise<number | null> => {
   try {
     const token = await getAccessToken();
     if (!token) return null;
 
-    // Decode JWT (without verification - just to get user_id)
     const base64Url = token.split('.')[1];
     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
     const jsonPayload = decodeURIComponent(
@@ -69,7 +68,6 @@ interface Message {
   is_read?: boolean;
 }
 
-// Helper function to format timestamp
 const formatMessageTime = (timestamp: string): string => {
   const date = new Date(timestamp);
   return date.toLocaleTimeString('en-US', {
@@ -79,7 +77,6 @@ const formatMessageTime = (timestamp: string): string => {
   });
 };
 
-// Convert API message to UI message format
 const convertApiMessageToUIMessage = (
   apiMessage: MessageResponse,
   currentUserId: number
@@ -124,10 +121,8 @@ export default function ChatScreen() {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
-  // Cache key for messages
   const getCacheKey = (conversationId: string) => `messages_${conversationId}`;
 
-  // Load cached messages
   const loadCachedMessages = async (conversationId: string, userId: number) => {
     try {
       const cacheKey = getCacheKey(conversationId);
@@ -146,7 +141,6 @@ export default function ChatScreen() {
     }
   };
 
-  // Save messages to cache
   const cacheMessages = async (
     conversationId: string,
     messages: Message[],
@@ -168,7 +162,6 @@ export default function ChatScreen() {
     }
   };
 
-  // Load messages from API
   const loadMessages = async (conversationId: string, userId: number, showRefreshing = false) => {
     try {
       if (showRefreshing) {
@@ -199,10 +192,8 @@ export default function ChatScreen() {
       setMessages(uiMessages);
       setNextPage(response.next);
 
-      // Cache the messages for viewing
       await cacheMessages(conversationId, uiMessages, response.next);
 
-      // Cache messages for search
       const searchCacheMessages = uiMessages.map((msg) => ({
         id: msg.id,
         content: msg.text,
@@ -224,7 +215,6 @@ export default function ChatScreen() {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load messages';
 
       if (!showRefreshing) {
-        // Only show alert on initial load, not on refresh
         Alert.alert('Error', errorMessage + '\n\nPlease check your connection and try again.');
       } else {
         console.log('Failed to refresh messages:', errorMessage);
@@ -236,7 +226,6 @@ export default function ChatScreen() {
     return [];
   };
 
-  // Load more messages (pagination)
   const loadMoreMessages = async () => {
     if (!nextPage || isLoadingMore || !currentUserId || !id) return;
 
@@ -262,16 +251,13 @@ export default function ChatScreen() {
           .map((msg: MessageResponse) => convertApiMessageToUIMessage(msg, currentUserId))
           .reverse();
 
-        // Prepend older messages to the beginning
         const updatedMessages = [...newMessages, ...messages];
         setMessages(updatedMessages);
         setNextPage(data.next);
 
-        // Update cache
         const conversationId = Array.isArray(id) ? id[0] : id;
         await cacheMessages(conversationId, updatedMessages, data.next);
 
-        // Update search cache with new messages
         const searchCacheMessages = newMessages.map((msg: Message) => ({
           id: msg.id,
           content: msg.text,
@@ -295,20 +281,17 @@ export default function ChatScreen() {
     }
   };
 
-  // Load user ID and messages on mount
   useEffect(() => {
     const initialize = async () => {
       if (!id) return;
 
       try {
-        // Try to get user ID from storage first
         let userIdStr = await getUserId();
         let userId: number | null = null;
 
         if (userIdStr) {
           userId = parseInt(userIdStr);
         } else {
-          // Fallback: decode from JWT token
           console.log('User ID not in storage, decoding from token...');
           userId = await getUserIdFromToken();
 
@@ -701,7 +684,7 @@ export default function ChatScreen() {
 
     return (
       <View
-        className={`mt-4 ${isMe ? 'items-end' : 'items-start'} px-4 ${isHighlighted ? 'rounded-lg bg-gray-800 py-2' : ''}`}>
+        className={`mt-4 ${isMe ? 'items-end' : 'items-start'} px-4 ${isHighlighted ? 'rounded-lg bg-transparent py-2' : ''}`}>
         {!isMe && (
           <View className="mb-2 flex-row items-center">
             <AvatarImage source={null} name={displayName} size={32} />
@@ -745,153 +728,160 @@ export default function ChatScreen() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-black" edges={['top', 'bottom']}>
+    <SafeAreaView className="flex-1" edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        className="flex-1"
-        keyboardVerticalOffset={0}>
-        {/* Header */}
-        <View className="flex-row items-center justify-between border-b border-gray-800 bg-black px-4 py-3">
-          <View className="flex-1 flex-row items-center">
-            <TouchableOpacity onPress={() => router.back()} className="mr-3">
-              <Ionicons name="chevron-back" size={28} color="#fff" />
-            </TouchableOpacity>
-            <AvatarImage source={null} name={chatName} size={40} />
-            <View className="ml-3 flex-1">
-              <Text className="text-lg font-semibold text-white">{chatName}</Text>
-              <View className="flex-row items-center">
-                {isConnecting ? (
-                  <Text className="text-xs text-gray-400">Connecting...</Text>
-                ) : isConnected ? (
-                  <>
-                    <View className="mr-1 h-2 w-2 rounded-full bg-green-500" />
-                    <Text className="text-xs text-gray-400">
-                      {isGroup ? 'Group Chat' : 'Active now'}
-                    </Text>
-                  </>
-                ) : (
-                  <>
-                    <View className="mr-1 h-2 w-2 rounded-full bg-red-500" />
-                    <Text className="text-xs text-red-400">Disconnected</Text>
-                  </>
-                )}
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Messages */}
-        {isLoadingMessages ? (
-          <View className="flex-1 items-center justify-center">
-            <ActivityIndicator size="large" color="#4A9EFF" />
-            <Text className="mt-4 text-gray-400">Loading messages...</Text>
-          </View>
-        ) : messages.length === 0 ? (
-          <View className="flex-1 items-center justify-center px-6">
-            <Ionicons name="chatbubble-outline" size={64} color="#666" />
-            <Text className="mt-4 text-lg font-semibold text-gray-400">No messages yet</Text>
-            <Text className="mt-2 text-center text-sm text-gray-500">
-              Start the conversation by sending a message
-            </Text>
-          </View>
-        ) : (
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            renderItem={renderMessage}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={{ paddingTop: 16, paddingBottom: 16 }}
-            showsVerticalScrollIndicator={false}
-            onContentSizeChange={() => {
-              // Only auto-scroll if not highlighting a message
-              if (!highlightMessage || highlightMessage !== 'true') {
-                flatListRef.current?.scrollToEnd({ animated: false });
-              }
-            }}
-            onEndReached={loadMoreMessages}
-            onScrollToIndexFailed={(info) => {
-              // Handle scroll to index failure
-              const wait = new Promise((resolve) => setTimeout(resolve, 500));
-              wait.then(() => {
-                flatListRef.current?.scrollToIndex({
-                  index: info.index,
-                  animated: true,
-                  viewPosition: 0.5,
-                });
-              });
-            }}
-            onEndReachedThreshold={0.5}
-            ListHeaderComponent={
-              isLoadingMore ? (
-                <View className="py-4">
-                  <ActivityIndicator size="small" color="#4A9EFF" />
-                  <Text className="mt-2 text-center text-xs text-gray-400">
-                    Loading older messages...
-                  </Text>
-                </View>
-              ) : null
-            }
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={handleRefresh}
-                tintColor="#4A9EFF"
-                colors={['#4A9EFF']}
-              />
-            }
-          />
-        )}
-
-        {/* Input Bar */}
-        <View className="border-t border-gray-800 bg-black px-4 py-3">
-          {/* Edit Mode Indicator */}
-          {editingMessageId && (
-            <View className="mb-2 flex-row items-center justify-between rounded-lg bg-gray-900 px-3 py-2">
-              <View className="flex-1 flex-row items-center">
-                <Entypo name="edit" size={16} color="#4A9EFF" />
-                <Text className="ml-2 text-sm text-gray-400">Editing message</Text>
-              </View>
-              <TouchableOpacity onPress={handleCancelEdit}>
-                <Ionicons name="close" size={20} color="#fff" />
+        style={{ flex: 1 }}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}>
+        <ImageBackground
+          source={require('../../assets/background_Img.jpg')}
+          className="flex-1"
+          resizeMode="cover">
+          {/* Header */}
+          <View className="flex-row items-center justify-between border-b border-gray-800 bg-black px-4 py-3">
+            <View className="flex-1 flex-row items-center">
+              <TouchableOpacity onPress={() => router.back()} className="mr-3">
+                <Ionicons name="chevron-back" size={28} color="#fff" />
               </TouchableOpacity>
+              <AvatarImage source={null} name={chatName} size={40} />
+              <View className="ml-3 flex-1">
+                <Text className="text-lg font-semibold text-white">{chatName}</Text>
+                <View className="flex-row items-center">
+                  {isConnecting ? (
+                    <Text className="text-xs text-gray-400">Connecting...</Text>
+                  ) : isConnected ? (
+                    <>
+                      <View className="mr-1 h-2 w-2 rounded-full bg-green-500" />
+                      <Text className="text-xs text-gray-400">
+                        {isGroup ? 'Group Chat' : 'Active now'}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <View className="mr-1 h-2 w-2 rounded-full bg-red-500" />
+                      <Text className="text-xs text-red-400">Disconnected</Text>
+                    </>
+                  )}
+                </View>
+              </View>
             </View>
+          </View>
+
+          {/* Messages */}
+          {isLoadingMessages ? (
+            <View className="flex-1 items-center justify-center">
+              <ActivityIndicator size="large" color="#4A9EFF" />
+              <Text className="mt-4 text-gray-400">Loading messages...</Text>
+            </View>
+          ) : messages.length === 0 ? (
+            <View className="flex-1 items-center justify-center px-6">
+              <Ionicons name="chatbubble-outline" size={64} color="#666" />
+              <Text className="mt-4 text-lg font-semibold text-gray-400">No messages yet</Text>
+              <Text className="mt-2 text-center text-sm text-gray-500">
+                Start the conversation by sending a message
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              ref={flatListRef}
+              data={messages}
+              renderItem={renderMessage}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={{ paddingTop: 16, paddingBottom: 16 }}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              showsVerticalScrollIndicator={true}
+              onContentSizeChange={() => {
+                // Only auto-scroll if not highlighting a message
+                if (!highlightMessage || highlightMessage !== 'true') {
+                  flatListRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
+              onEndReached={loadMoreMessages}
+              onScrollToIndexFailed={(info) => {
+                // Handle scroll to index failure
+                const wait = new Promise((resolve) => setTimeout(resolve, 500));
+                wait.then(() => {
+                  flatListRef.current?.scrollToIndex({
+                    index: info.index,
+                    animated: true,
+                    viewPosition: 0.5,
+                  });
+                });
+              }}
+              onEndReachedThreshold={0.5}
+              ListHeaderComponent={
+                isLoadingMore ? (
+                  <View className="py-4">
+                    <ActivityIndicator size="small" color="#4A9EFF" />
+                    <Text className="mt-2 text-center text-xs text-gray-400">
+                      Loading older messages...
+                    </Text>
+                  </View>
+                ) : null
+              }
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={handleRefresh}
+                  tintColor="#4A9EFF"
+                  colors={['#4A9EFF']}
+                />
+              }
+            />
           )}
 
-          <View className="flex-row items-center">
-            {/* Input Field */}
-            <View className="mr-2 flex-1 flex-row items-center rounded-full bg-gray-800 px-4">
-              <TextInput
-                value={inputText}
-                onChangeText={setInputText}
-                placeholder="Aa"
-                placeholderTextColor="#666"
-                className="flex-1 py-2 text-base text-white"
-                multiline
-                maxLength={500}
-              />
-              <TouchableOpacity onPress={() => setIsOpen(true)}>
-                <MaterialCommunityIcons name="sticker-emoji" size={24} color="#4A9EFF" />
-              </TouchableOpacity>
+          {/* Input Bar */}
+          <View className="border-t border-gray-800 bg-black px-4 py-3">
+            {/* Edit Mode Indicator */}
+            {editingMessageId && (
+              <View className="mb-2 flex-row items-center justify-between rounded-lg bg-gray-900 px-3 py-2">
+                <View className="flex-1 flex-row items-center">
+                  <Entypo name="edit" size={16} color="#4A9EFF" />
+                  <Text className="ml-2 text-sm text-gray-400">Editing message</Text>
+                </View>
+                <TouchableOpacity onPress={handleCancelEdit}>
+                  <Ionicons name="close" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <View className="flex-row items-center">
+              {/* Input Field */}
+              <View className="mr-2 flex-1 flex-row items-center rounded-lg bg-gray-800 px-4">
+                <TextInput
+                  value={inputText}
+                  onChangeText={setInputText}
+                  placeholder="Write Something"
+                  placeholderTextColor="#666"
+                  className="max-h-[100px] flex-1 py-2 text-base text-white"
+                  multiline
+                  maxLength={100}
+                />
+                <TouchableOpacity className="" onPress={() => setIsOpen(true)}>
+                  <MaterialCommunityIcons name="sticker-emoji" size={24} color="#4A9EFF" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Send Button */}
+              <Pressable
+                onPress={handleSend}
+                className={`h-10 w-10 items-center justify-center rounded-full ${
+                  inputText.trim() && isConnected ? 'bg-blue-600' : 'bg-gray-700'
+                }`}
+                disabled={!inputText.trim() || !isConnected}>
+                <Ionicons name={editingMessageId ? 'checkmark' : 'send'} size={20} color="#fff" />
+              </Pressable>
             </View>
 
-            {/* Send Button */}
-            <Pressable
-              onPress={handleSend}
-              className={`h-10 w-10 items-center justify-center rounded-full ${
-                inputText.trim() && isConnected ? 'bg-blue-600' : 'bg-gray-700'
-              }`}
-              disabled={!inputText.trim() || !isConnected}>
-              <Ionicons name={editingMessageId ? 'checkmark' : 'send'} size={20} color="#fff" />
-            </Pressable>
+            {/* Emoji Picker Modal */}
+            <EmojiPicker
+              onEmojiSelected={handlePick}
+              open={isOpen}
+              onClose={() => setIsOpen(false)}
+            />
           </View>
-
-          {/* Emoji Picker Modal */}
-          <EmojiPicker
-            onEmojiSelected={handlePick}
-            open={isOpen}
-            onClose={() => setIsOpen(false)}
-          />
-        </View>
+        </ImageBackground>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

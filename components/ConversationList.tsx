@@ -105,25 +105,17 @@ const AnimatedConversationItem = ({
 
           {/* Selection Indicator or Unread Badge */}
           <View className="h-10 w-10 items-center justify-center">
-            {!isSelected && item.unreadCount && item.unreadCount > 0 ? (
-              <View className="h-6 min-w-[24px] items-center justify-center rounded-full bg-blue-600 px-2">
-                <Text className="text-xs font-bold text-white">
-                  {item.unreadCount > 99 ? '99+' : item.unreadCount}
-                </Text>
-              </View>
-            ) : (
-              <>
-                <Animated.View
-                  style={animatedCheckStyle}
-                  className="absolute h-7 w-7 items-center justify-center rounded-full bg-green-500">
-                  <MaterialIcons name="check" size={18} color="#fff" />
-                </Animated.View>
-                <Animated.View
-                  style={animatedBorderStyle}
-                  className="absolute h-7 w-7 rounded-full border-2 border-gray-600"
-                />
-              </>
-            )}
+            <>
+              <Animated.View
+                style={animatedCheckStyle}
+                className="absolute h-7 w-7 items-center justify-center rounded-full bg-green-500">
+                <MaterialIcons name="check" size={18} color="#fff" />
+              </Animated.View>
+              <Animated.View
+                style={animatedBorderStyle}
+                className="absolute h-7 w-7 rounded-full border-2 border-gray-600"
+              />
+            </>
           </View>
         </View>
       </Animated.View>

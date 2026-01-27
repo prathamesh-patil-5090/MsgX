@@ -154,7 +154,7 @@ export default function GroupScreen() {
   };
 
   const handleNewGroup = () => {
-    router.push('/search');
+    router.push('/add');
   };
 
   // Loading state

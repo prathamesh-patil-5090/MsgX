@@ -154,7 +154,7 @@ export default function DMScreen() {
   };
 
   const handleNewChat = () => {
-    router.push('/search');
+    router.push('/add');
   };
 
   // Loading state
