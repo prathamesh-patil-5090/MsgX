@@ -21,6 +21,10 @@ import {
   deleteConversation,
   fetchConversations,
 } from 'services/conversationsApi';
+import {
+  ConversationsWSEvent,
+  conversationsWebSocketService,
+} from 'services/conversationsWebSocket';
 import '../../../global.css';
 
 // Helper function to format timestamp
@@ -109,11 +113,103 @@ export default function GroupScreen() {
     loadConversations();
   }, [loadConversations]);
 
+  // WebSocket for real-time conversation updates
+  useEffect(() => {
+    conversationsWebSocketService.connect().catch(console.error);
+
+    const unsubscribe = conversationsWebSocketService.onEvent((event: ConversationsWSEvent) => {
+      console.log('[Group] WebSocket event received:', event.type, event);
+
+      if (event.type === 'initial_conversations') {
+        const groupConversations = event.conversations.filter(
+          (c: ConversationResponse) => c.is_group
+        );
+        console.log('[Group] Filtered group conversations:', groupConversations.length);
+        const formatted = groupConversations.map(convertToConversationFormat);
+        setConversations(formatted);
+        setLoading(false);
+        setRefreshing(false);
+        setError(null);
+        cacheConversations(formatted, 'group').catch(console.error);
+      } else if (event.type === 'conversation_update' && event.action === 'new_message') {
+        const conv = event.conversation;
+        console.log(
+          '[Group] Conversation update for:',
+          conv.id,
+          'is_group:',
+          conv.is_group,
+          'message:',
+          conv.latest_message?.content
+        );
+
+        // Skip DM conversations in Group screen
+        if (!conv.is_group) {
+          console.log('[Group] Skipping DM conversation');
+          return;
+        }
+
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === conv.id.toString());
+
+          // If conversation exists, update it
+          if (idx >= 0) {
+            const updated = [...prev];
+            const [existing] = updated.splice(idx, 1);
+
+            // Update with new message if available
+            const updatedConv = {
+              ...existing,
+              lastMessage: conv.latest_message?.content || existing.lastMessage,
+              sender: conv.latest_message?.sender_name || existing.sender,
+              messageTime: conv.latest_message
+                ? formatMessageTime(conv.latest_message.created_at)
+                : existing.messageTime,
+              status: 'unread' as const,
+              unreadCount: (existing.unreadCount || 0) + 1,
+            };
+
+            // Move to top
+            updated.unshift(updatedConv);
+            return updated;
+          }
+
+          // If conversation doesn't exist yet, add it (new conversation)
+          if (conv.latest_message) {
+            const newConv = convertToConversationFormat({
+              ...conv,
+              display_name: conv.name || `Group ${conv.id}`,
+              other_participant: null,
+              created_by: conv.latest_message.sender_id,
+              unread_count: 1,
+              created_at: conv.latest_message.created_at,
+              updated_at: conv.latest_message.created_at,
+              name: conv.name,
+              is_group: true,
+            } as ConversationResponse);
+
+            return [newConv, ...prev];
+          }
+
+          return prev;
+        });
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   // Refresh conversations when screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      console.log('[Group] Screen focused, refreshing conversations');
-      loadConversations(true);
+      if (conversationsWebSocketService.isConnected()) {
+        console.log('[Group] Screen focused, refreshing via WebSocket');
+        conversationsWebSocketService.refresh();
+      } else {
+        console.log('[Group] Screen focused, refreshing via REST');
+        loadConversations(true);
+      }
     }, [loadConversations])
   );
 

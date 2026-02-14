@@ -100,19 +100,23 @@ class WebSocketService {
     }
   }
 
-  sendMessage(message: string): void {
+  sendMessage(message: string): string {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket is not connected');
       throw new Error('WebSocket is not connected');
     }
 
-    const payload: WebSocketMessage = {
+    const tempId = `client_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    const payload = {
       message,
-      message_type: 'TEXT',
+      message_type: 'TEXT' as const,
+      temp_id: tempId,
     };
 
     console.log('Sending message:', payload);
     this.ws.send(JSON.stringify(payload));
+    return tempId;
   }
 
   disconnect(): void {

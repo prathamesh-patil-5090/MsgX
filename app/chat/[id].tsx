@@ -26,6 +26,7 @@ import {
   deleteMessage,
   fetchMessages,
   markMessageAsRead,
+  sendMessage,
   updateMessage,
   type MessageResponse,
 } from 'services/messagesApi';
@@ -48,7 +49,6 @@ const getUserIdFromToken = async (): Promise<number | null> => {
 
     const payload = JSON.parse(jsonPayload);
     const userId = payload.user_id;
-    // Ensure it's a number
     return userId ? parseInt(userId.toString()) : null;
   } catch (error) {
     console.error('Error decoding token:', error);
@@ -96,6 +96,82 @@ const convertApiMessageToUIMessage = (
   };
 };
 
+/**
+ * Process raw API messages: deduplicate DB vs Kafka overlap, sort chronologically.
+ *
+ * The backend may return the SAME message from both the DB (real auto-increment ID,
+ * valid `created_at`) and the Kafka pending queue (fake sequential ID, `null`
+ * `created_at` for WS-originated messages). This helper:
+ *   1. Separates messages with a valid timestamp (DB) from those without (Kafka pending).
+ *   2. Drops any Kafka-pending entry whose content+sender already appears in the DB set.
+ *   3. Sorts DB messages oldest→newest, appends unique pending messages at the end.
+ */
+const processApiMessages = (results: MessageResponse[], userId: number): Message[] => {
+  const withTime: MessageResponse[] = [];
+  const withoutTime: MessageResponse[] = [];
+
+  for (const msg of results) {
+    const t = msg.created_at ? new Date(msg.created_at).getTime() : NaN;
+    if (!isNaN(t)) {
+      withTime.push(msg);
+    } else {
+      withoutTime.push(msg);
+    }
+  }
+
+  // DB-messages content signatures — used to drop Kafka duplicates
+  const dbSignatures = new Set(withTime.map((m) => `${m.sender.id}|${m.content}`));
+
+  // Only keep pending messages not already present in DB results
+  const uniquePending = withoutTime.filter((m) => !dbSignatures.has(`${m.sender.id}|${m.content}`));
+
+  // DB messages sorted oldest → newest, then unique pending (newest) at end
+  const combined = [
+    ...withTime.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+    ...uniquePending,
+  ];
+
+  return combined.map((msg) => convertApiMessageToUIMessage(msg, userId));
+};
+
+/**
+ * Deduplicate messages array by id.
+ * For WS messages (id starts with 'ws_' or 'pending_'), if an API message
+ * with matching content+sender exists, the WS version is dropped.
+ */
+const deduplicateMessages = (msgs: Message[]): Message[] => {
+  const seen = new Map<string, number>(); // id -> index in result
+  const result: Message[] = [];
+
+  for (const msg of msgs) {
+    const existingIdx = seen.get(msg.id);
+    if (existingIdx !== undefined) {
+      // Same id: keep whichever is NOT pending
+      if (msg.isPending) continue;
+      result[existingIdx] = msg;
+    } else {
+      seen.set(msg.id, result.length);
+      result.push(msg);
+    }
+  }
+
+  // Build a set of API message signatures for content-based dedup
+  const apiSignatures = new Set<string>();
+  for (const msg of result) {
+    if (!msg.id.startsWith('ws_') && !msg.id.startsWith('pending_')) {
+      apiSignatures.add(`${msg.sender_id}|${msg.text}`);
+    }
+  }
+
+  // Remove WS/pending messages that have an API equivalent
+  return result.filter((msg) => {
+    if (msg.id.startsWith('ws_') || msg.id.startsWith('pending_')) {
+      return !apiSignatures.has(`${msg.sender_id}|${msg.text}`);
+    }
+    return true;
+  });
+};
+
 export default function ChatScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -111,7 +187,7 @@ export default function ChatScreen() {
   const [inputText, setInputText] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(true);
-  const [isLoadingMessages, setIsLoadingMessages] = useState(true);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const currentUserIdRef = useRef<number | null>(null);
@@ -123,7 +199,10 @@ export default function ChatScreen() {
 
   const getCacheKey = (conversationId: string) => `messages_${conversationId}`;
 
-  const loadCachedMessages = async (conversationId: string, userId: number) => {
+  const loadCachedMessages = async (
+    conversationId: string,
+    userId: number
+  ): Promise<Message[] | null> => {
     try {
       const cacheKey = getCacheKey(conversationId);
       const cached = await AsyncStorage.getItem(cacheKey);
@@ -132,98 +211,113 @@ export default function ChatScreen() {
         console.log(`Loaded ${cachedData.messages.length} cached messages`);
         setMessages(cachedData.messages);
         setNextPage(cachedData.nextPage);
-        return true;
+        return cachedData.messages as Message[];
       }
-      return false;
+      return null;
     } catch (error) {
       console.error('Error loading cached messages:', error);
-      return false;
+      return null;
     }
   };
 
-  const cacheMessages = async (
-    conversationId: string,
-    messages: Message[],
-    nextPage: string | null
-  ) => {
+  const cacheMessages = async (conversationId: string, msgs: Message[], page: string | null) => {
     try {
       const cacheKey = getCacheKey(conversationId);
       await AsyncStorage.setItem(
         cacheKey,
         JSON.stringify({
-          messages,
-          nextPage,
+          messages: msgs,
+          nextPage: page,
           timestamp: new Date().toISOString(),
         })
       );
-      console.log('Messages cached successfully');
     } catch (error) {
       console.error('Error caching messages:', error);
     }
   };
 
+  // Sync current messages state to cache (call after any mutation)
+  const syncCache = (updatedMessages?: Message[]) => {
+    const conversationId = Array.isArray(id) ? id[0] : (id as string);
+    if (!conversationId) return;
+    const msgs = updatedMessages ?? messages;
+    cacheMessages(conversationId, msgs, nextPage).catch(console.error);
+
+    // Also sync search cache
+    const searchMsgs = msgs
+      .filter((m) => m.sender_id !== undefined && m.sender_name !== undefined)
+      .map((m) => ({
+        id: m.id,
+        content: m.text,
+        senderId: m.sender_id || 0,
+        senderName: m.sender_name || chatName,
+        timestamp: m.timestamp,
+      }));
+    cacheMessagesForSearch(conversationId, chatName, searchMsgs, isGroup ? 'group' : 'dm').catch(
+      console.error
+    );
+  };
+
   const loadMessages = async (conversationId: string, userId: number, showRefreshing = false) => {
     try {
-      if (showRefreshing) {
-        setRefreshing(true);
-      } else {
+      if (!showRefreshing) {
         setIsLoadingMessages(true);
       }
 
-      console.log('Fetching messages for conversation:', conversationId);
       const response = await fetchMessages(parseInt(conversationId));
-      console.log('API Response type:', typeof response);
-      console.log('API Response keys:', response ? Object.keys(response) : 'null/undefined');
-      console.log('Response.results:', response?.results);
-      console.log('Is results an array?', Array.isArray(response?.results));
 
       if (!response || !response.results || !Array.isArray(response.results)) {
         console.error('Invalid or empty response:', response);
-        setMessages([]);
-        setIsLoadingMessages(false);
-        setRefreshing(false);
-        return;
+        if (!showRefreshing) setMessages([]);
+        return [];
       }
 
-      const uiMessages = response.results
-        .map((msg) => convertApiMessageToUIMessage(msg, userId))
-        .reverse(); // Reverse so newest messages are at the bottom
+      const uiMessages = processApiMessages(response.results, userId);
 
-      setMessages(uiMessages);
+      // Always use functional update to avoid overwriting concurrent sends
+      setMessages((prev) => {
+        if (showRefreshing) {
+          // Merge: API is source-of-truth for persisted messages,
+          // but keep any recent WS/optimistic messages not yet confirmed by API
+          const apiIds = new Set(uiMessages.map((m) => m.id));
+          const pendingMsgs = prev.filter(
+            (m) => (m.id.startsWith('ws_') || m.id.startsWith('pending_')) && !apiIds.has(m.id)
+          );
+          return deduplicateMessages([...uiMessages, ...pendingMsgs]);
+        } else {
+          // First load: keep any optimistic messages that were added
+          // concurrently while API was loading
+          const optimistic = prev.filter(
+            (m) => m.id.startsWith('pending_') || m.id.startsWith('ws_')
+          );
+          return deduplicateMessages([...uiMessages, ...optimistic]);
+        }
+      });
       setNextPage(response.next);
-
       await cacheMessages(conversationId, uiMessages, response.next);
 
-      const searchCacheMessages = uiMessages.map((msg) => ({
+      // Sync search cache
+      const searchMsgs = uiMessages.map((msg) => ({
         id: msg.id,
         content: msg.text,
         senderId: msg.sender_id || 0,
         senderName: msg.sender_name || chatName,
         timestamp: msg.timestamp,
       }));
-      await cacheMessagesForSearch(
-        conversationId,
-        chatName,
-        searchCacheMessages,
-        isGroup ? 'group' : 'dm'
-      );
+      await cacheMessagesForSearch(conversationId, chatName, searchMsgs, isGroup ? 'group' : 'dm');
 
-      console.log(`Loaded ${uiMessages.length} messages for conversation ${conversationId}`);
       return uiMessages;
     } catch (error) {
       console.error('Error loading messages:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to load messages';
-
       if (!showRefreshing) {
-        Alert.alert('Error', errorMessage + '\n\nPlease check your connection and try again.');
-      } else {
-        console.log('Failed to refresh messages:', errorMessage);
+        const msg = error instanceof Error ? error.message : 'Failed to load messages';
+        Alert.alert('Error', msg + '\n\nPlease check your connection and try again.');
       }
+      return [];
     } finally {
       setIsLoadingMessages(false);
       setRefreshing(false);
     }
-    return [];
   };
 
   const loadMoreMessages = async () => {
@@ -231,7 +325,6 @@ export default function ChatScreen() {
 
     try {
       setIsLoadingMore(true);
-      console.log('Loading more messages from:', nextPage);
 
       const response = await fetch(nextPage, {
         headers: {
@@ -247,11 +340,10 @@ export default function ChatScreen() {
       const data = await response.json();
 
       if (data.results && data.results.messages && Array.isArray(data.results.messages)) {
-        const newMessages = data.results.messages
-          .map((msg: MessageResponse) => convertApiMessageToUIMessage(msg, currentUserId))
-          .reverse();
+        const newMessages = processApiMessages(data.results.messages, currentUserId);
 
-        const updatedMessages = [...newMessages, ...messages];
+        // Deduplicate to handle pagination overlap
+        const updatedMessages = deduplicateMessages([...newMessages, ...messages]);
         setMessages(updatedMessages);
         setNextPage(data.next);
 
@@ -271,8 +363,6 @@ export default function ChatScreen() {
           searchCacheMessages,
           isGroup ? 'group' : 'dm'
         );
-
-        console.log(`Loaded ${newMessages.length} more messages`);
       }
     } catch (error) {
       console.error('Error loading more messages:', error);
@@ -292,7 +382,6 @@ export default function ChatScreen() {
         if (userIdStr) {
           userId = parseInt(userIdStr);
         } else {
-          console.log('User ID not in storage, decoding from token...');
           userId = await getUserIdFromToken();
 
           if (!userId) {
@@ -311,15 +400,17 @@ export default function ChatScreen() {
 
         const conversationId = Array.isArray(id) ? id[0] : id;
 
-        const hasCached = await loadCachedMessages(conversationId, userId);
+        // 1. Show cached messages instantly (no loading spinner)
+        const cachedMsgs = await loadCachedMessages(conversationId, userId);
 
-        let loadedMessages: Message[] = [];
-        if (hasCached) {
-          setIsLoadingMessages(false);
-          loadedMessages = (await loadMessages(conversationId, userId)) || [];
-        } else {
-          loadedMessages = (await loadMessages(conversationId, userId)) || [];
-        }
+        // 2. Silently refresh from API in background
+        //    If no cache, show loading spinner briefly
+        const loadedMessages =
+          (await loadMessages(
+            conversationId,
+            userId,
+            !!cachedMsgs // showRefreshing=true when we have cache (no spinner)
+          )) || [];
 
         if (highlightMessage === 'true' && messageId) {
           setHighlightedMessageId(Array.isArray(messageId) ? messageId[0] : messageId);
@@ -355,7 +446,6 @@ export default function ChatScreen() {
             try {
               await markMessageAsRead(parseInt(conversationId), messageId);
               setLastReadMessageId(messageId);
-              console.log(`Marked message ${messageId} as read`);
             } catch (error) {
               console.error('Error marking message as read:', error);
               // Don't show alert for this, it's not critical
@@ -390,33 +480,34 @@ export default function ChatScreen() {
       }
     };
 
-    // Wait a bit for messages to load before connecting WebSocket
-    const timer = setTimeout(() => {
-      connectWebSocket();
-    }, 500);
+    // Connect WebSocket immediately (no delay)
+    connectWebSocket();
 
     // Set up message handler
     const unsubscribeMessage = websocketService.onMessage((data: WebSocketResponse) => {
-      console.log('Received message from WebSocket:', data);
       const currentUserIdValue = currentUserIdRef.current;
-      console.log('Current user ID:', currentUserIdValue);
-      console.log('Message sender ID:', data.sender_id);
-      console.log('Sender ID type:', typeof data.sender_id);
-      console.log('Current user ID type:', typeof currentUserIdValue);
 
       // Use functional update to avoid dependency on messages
       setMessages((prev) => {
-        // This is a new message from another user
-        // Ensure type consistency for comparison
         const senderId = parseInt(data.sender_id.toString());
         const currentUserIdNum =
           currentUserIdValue !== null ? parseInt(currentUserIdValue.toString()) : null;
         const isFromMe = currentUserIdNum !== null && senderId === currentUserIdNum;
-        console.log('Is message from me?', isFromMe);
-        console.log('Comparison:', senderId, '===', currentUserIdNum);
+
+        // Ensure temp_id is a string for consistent comparison
+        const tempIdStr = data.temp_id.toString();
+
+        // Deduplicate: skip if this exact WS message already exists
+        if (prev.some((m) => m.id === `ws_${tempIdStr}`)) {
+          return prev;
+        }
+
+        // Replace optimistic (pending) message if it matches this temp_id
+        const hadPending = prev.some((m) => m.temp_id === tempIdStr);
+        const filtered = hadPending ? prev.filter((m) => m.temp_id !== tempIdStr) : prev;
 
         const newMessage: Message = {
-          id: data.temp_id,
+          id: `ws_${tempIdStr}`,
           text: data.message,
           sender: isFromMe ? 'me' : 'other',
           sender_id: data.sender_id,
@@ -425,47 +516,32 @@ export default function ChatScreen() {
             minute: '2-digit',
             hour12: false,
           }),
-          temp_id: data.temp_id,
+          temp_id: tempIdStr,
         };
-
-        console.log('New message created with sender:', newMessage.sender);
 
         // Scroll to bottom after adding message
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: false });
         }, 50);
 
-        const updatedMessages = [...prev, newMessage];
+        const updatedMessages = deduplicateMessages([...filtered, newMessage]);
+
+        // Sync cache with new message
+        syncCache(updatedMessages);
 
         // Mark as read if it's from another user
         if (!isFromMe && id) {
           const conversationId = Array.isArray(id) ? id[0] : id;
-          const messageId = parseInt(newMessage.id);
-          markMessageAsRead(parseInt(conversationId), messageId)
-            .then(() => {
-              setLastReadMessageId(messageId);
-            })
-            .catch((error) => {
-              console.error('Error marking message as read:', error);
-            });
-
-          // Cache new message for search
-          cacheMessagesForSearch(
-            conversationId,
-            chatName,
-            [
-              {
-                id: newMessage.id,
-                content: newMessage.text,
-                senderId: newMessage.sender_id || 0,
-                senderName: newMessage.sender_name || chatName,
-                timestamp: newMessage.timestamp,
-              },
-            ],
-            isGroup ? 'group' : 'dm'
-          ).catch((error) => {
-            console.error('Error caching message for search:', error);
-          });
+          const numericId = parseInt(newMessage.id.replace('ws_', ''));
+          if (!isNaN(numericId)) {
+            markMessageAsRead(parseInt(conversationId), numericId)
+              .then(() => {
+                setLastReadMessageId(numericId);
+              })
+              .catch((error) => {
+                console.error('Error marking message as read:', error);
+              });
+          }
         }
 
         return updatedMessages;
@@ -476,12 +552,10 @@ export default function ChatScreen() {
     const unsubscribeOpen = websocketService.onOpen(() => {
       setIsConnected(true);
       setIsConnecting(false);
-      console.log('WebSocket connection opened');
     });
 
     const unsubscribeClose = websocketService.onClose(() => {
       setIsConnected(false);
-      console.log('WebSocket connection closed');
     });
 
     const unsubscribeError = websocketService.onError((error) => {
@@ -491,7 +565,6 @@ export default function ChatScreen() {
 
     // Cleanup on unmount
     return () => {
-      clearTimeout(timer);
       unsubscribeMessage();
       unsubscribeOpen();
       unsubscribeClose();
@@ -538,27 +611,12 @@ export default function ChatScreen() {
             try {
               await deleteMessage(Number(id), Number(messageId));
 
-              setMessages((prev) => prev.filter((m) => m.id !== messageId));
+              setMessages((prev) => {
+                const filtered = prev.filter((m) => m.id !== messageId);
+                syncCache(filtered);
+                return filtered;
+              });
               setSelectedMessageId(null);
-
-              const searchCacheMessages = messages
-                .filter(
-                  (m) =>
-                    m.id !== messageId && m.sender_id !== undefined && m.sender_name !== undefined
-                )
-                .map((msg) => ({
-                  id: msg.id,
-                  content: msg.text,
-                  senderId: msg.sender_id!,
-                  senderName: msg.sender_name!,
-                  timestamp: msg.timestamp,
-                }));
-              await cacheMessagesForSearch(
-                id as string,
-                chatName,
-                searchCacheMessages,
-                isGroup ? 'group' : 'dm'
-              );
             } catch (error) {
               console.error('Error deleting message:', error);
               Alert.alert('Delete Failed', 'Could not delete message. Please try again.');
@@ -594,9 +652,9 @@ export default function ChatScreen() {
             messageText
           );
 
-          // Update message in UI
-          setMessages((prev) =>
-            prev.map((msg) =>
+          // Update message in UI + sync cache
+          setMessages((prev) => {
+            const updated = prev.map((msg) =>
               msg.id === editingMessageId
                 ? {
                     ...msg,
@@ -608,42 +666,13 @@ export default function ChatScreen() {
                     }),
                   }
                 : msg
-            )
-          );
+            );
+            syncCache(updated);
+            return updated;
+          });
 
           setEditingMessageId(null);
           setInputText('');
-
-          // Update cache
-          const searchCacheMessages = messages
-            .filter((msg) => msg.sender_id !== undefined && msg.sender_name !== undefined)
-            .map((msg) =>
-              msg.id === editingMessageId
-                ? {
-                    id: msg.id,
-                    content: updatedMessage.content,
-                    senderId: msg.sender_id!,
-                    senderName: msg.sender_name!,
-                    timestamp: new Date(updatedMessage.updated_at).toLocaleTimeString('en-US', {
-                      hour: 'numeric',
-                      minute: '2-digit',
-                      hour12: true,
-                    }),
-                  }
-                : {
-                    id: msg.id,
-                    content: msg.text,
-                    senderId: msg.sender_id!,
-                    senderName: msg.sender_name!,
-                    timestamp: msg.timestamp,
-                  }
-            );
-          await cacheMessagesForSearch(
-            id as string,
-            chatName,
-            searchCacheMessages,
-            isGroup ? 'group' : 'dm'
-          );
         } catch (error) {
           console.error('Error updating message:', error);
           Alert.alert('Update Failed', 'Could not update message. Please try again.');
@@ -651,22 +680,98 @@ export default function ChatScreen() {
         return;
       }
 
-      // Check if WebSocket is connected
-      if (!websocketService.isConnected()) {
-        Alert.alert('Not Connected', 'Unable to send message. Please check your connection.');
-        return;
-      }
-
       const messageText = inputText.trim();
+      setInputText('');
 
-      // Send via WebSocket first
-      try {
-        websocketService.sendMessage(messageText);
-        setInputText('');
-      } catch (error) {
-        console.error('Error sending message:', error);
-        Alert.alert('Send Failed', 'Could not send message. Please try again.');
+      // Try WebSocket first, fall back to REST API
+      if (websocketService.isConnected()) {
+        try {
+          const tempId = websocketService.sendMessage(messageText);
+          // Show optimistic message immediately
+          const optimisticMsg: Message = {
+            id: `pending_${tempId}`,
+            text: messageText,
+            sender: 'me',
+            sender_id: currentUserId ?? undefined,
+            timestamp: new Date().toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            }),
+            temp_id: tempId,
+            isPending: true,
+          };
+          setMessages((prev) => {
+            const updated = [...prev, optimisticMsg];
+            syncCache(updated);
+            return updated;
+          });
+          setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 50);
+        } catch (error) {
+          console.error('WebSocket send failed', error);
+          await sendViaRest(messageText);
+        }
+      } else {
+        await sendViaRest(messageText);
       }
+    }
+  };
+
+  // REST API fallback for sending messages
+  const sendViaRest = async (messageText: string) => {
+    const tempId = `rest_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const userId = currentUserIdRef.current;
+
+    // Show optimistic message immediately so it doesn't vanish
+    const optimisticMsg: Message = {
+      id: `pending_${tempId}`,
+      text: messageText,
+      sender: 'me',
+      sender_id: userId ?? undefined,
+      timestamp: new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }),
+      temp_id: tempId,
+      isPending: true,
+    };
+    setMessages((prev) => {
+      const updated = [...prev, optimisticMsg];
+      syncCache(updated);
+      return updated;
+    });
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 50);
+
+    try {
+      const conversationId = Array.isArray(id) ? id[0] : (id as string);
+      const response = await sendMessage(parseInt(conversationId), messageText);
+
+      // Backend returns { status: "queued", temp_id, payload } (HTTP 202).
+      // The message is queued; it will appear in the next API fetch.
+      // Keep the optimistic message until then (it will be deduped on refresh).
+      if (response && typeof response === 'object' && 'id' in response && 'sender' in response) {
+        // In case the backend returns a full MessageResponse:
+        if (userId) {
+          const uiMsg = convertApiMessageToUIMessage(response, userId);
+          setMessages((prev) => {
+            const updated = prev.map((m) => (m.id === `pending_${tempId}` ? uiMsg : m));
+            syncCache(updated);
+            return updated;
+          });
+        }
+      }
+      // If it's the "queued" response, optimistic message stays until next API load
+    } catch (error) {
+      console.error('REST send failed:', error);
+      // Remove optimistic message and restore input
+      setMessages((prev) => {
+        const updated = prev.filter((m) => m.id !== `pending_${tempId}`);
+        syncCache(updated);
+        return updated;
+      });
+      setInputText(messageText);
+      Alert.alert('Send Failed', 'Could not send message. Please try again.');
     }
   };
 
@@ -702,7 +807,7 @@ export default function ChatScreen() {
               {item.sender_id === currentUserId && (
                 <OptionsModal
                   messageId={item.id}
-                  onEdit={handleEditMessage}
+                  onEdit={() => handleEditMessage}
                   onDelete={handleDeleteMessage}
                 />
               )}
@@ -867,9 +972,9 @@ export default function ChatScreen() {
               <Pressable
                 onPress={handleSend}
                 className={`h-10 w-10 items-center justify-center rounded-full ${
-                  inputText.trim() && isConnected ? 'bg-blue-600' : 'bg-gray-700'
+                  inputText.trim() ? 'bg-blue-600' : 'bg-gray-700'
                 }`}
-                disabled={!inputText.trim() || !isConnected}>
+                disabled={!inputText.trim()}>
                 <Ionicons name={editingMessageId ? 'checkmark' : 'send'} size={20} color="#fff" />
               </Pressable>
             </View>
