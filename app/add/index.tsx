@@ -13,8 +13,10 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { withAuthErrorHandling } from 'services/authUtils';
 import { createConversation } from 'services/conversationsApi';
 import {
@@ -38,6 +40,7 @@ type ViewMode = 'browse' | 'search';
 
 export default function SearchUsersScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   // Search and users state
   const [searchQuery, setSearchQuery] = useState('');
@@ -491,52 +494,64 @@ export default function SearchUsersScreen() {
         transparent
         animationType="slide"
         onRequestClose={() => setShowGroupModal(false)}>
-        <View className="flex-1 justify-end bg-black/50">
-          <View className="rounded-t-3xl bg-gray-900 px-6 py-6">
-            <View className="mb-4 flex-row items-center justify-between">
-              <Text className="text-xl font-semibold text-white">Create Group</Text>
-              <TouchableOpacity onPress={() => setShowGroupModal(false)}>
-                <Ionicons name="close" size={24} color="#666666" />
-              </TouchableOpacity>
-            </View>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+          style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <View style={{ flex: 1, backgroundColor: 'transparent' }} />
 
-            <Text className="mb-2 text-sm text-gray-400">Group Name</Text>
-            <TextInput
-              style={{
-                backgroundColor: '#1a1a1a',
-                borderRadius: 8,
-                padding: 12,
-                color: '#ffffff',
-                fontSize: 16,
-                marginBottom: 16,
-              }}
-              placeholder="Enter group name..."
-              placeholderTextColor="#666666"
-              value={groupName}
-              onChangeText={setGroupName}
-              autoFocus
-            />
+          <View style={{ maxHeight: '40%' }}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 20) }}>
+              <View className="rounded-t-3xl bg-gray-900 px-6 py-6">
+                <View className="mb-4 flex-row items-center justify-between">
+                  <Text className="text-xl font-semibold text-white">Create Group</Text>
+                  <TouchableOpacity onPress={() => setShowGroupModal(false)}>
+                    <Ionicons name="close" size={24} color="#666666" />
+                  </TouchableOpacity>
+                </View>
 
-            <Text className="mb-3 text-sm text-gray-400">Members ({selectedUsers.length})</Text>
+                <Text className="mb-2 text-sm text-gray-400">Group Name</Text>
+                <TextInput
+                  style={{
+                    backgroundColor: '#1a1a1a',
+                    borderRadius: 8,
+                    padding: 12,
+                    color: '#ffffff',
+                    fontSize: 16,
+                    marginBottom: 16,
+                  }}
+                  placeholder="Enter group name..."
+                  placeholderTextColor="#666666"
+                  value={groupName}
+                  onChangeText={setGroupName}
+                  autoFocus
+                />
 
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-6">
-              <View className="flex-row">{selectedUsers.map(renderSelectedUser)}</View>
+                <Text className="mb-3 text-sm text-gray-400">Members ({selectedUsers.length})</Text>
+
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-6">
+                  <View className="flex-row">{selectedUsers.map(renderSelectedUser)}</View>
+                </ScrollView>
+
+                <TouchableOpacity
+                  onPress={handleGroupCreation}
+                  disabled={creatingGroup || !groupName.trim()}
+                  className={`items-center rounded-lg py-4 ${
+                    creatingGroup || !groupName.trim() ? 'bg-gray-600' : 'bg-blue-600'
+                  }`}
+                  style={{ marginBottom: Math.max(insets.bottom, 12) }}>
+                  {creatingGroup ? (
+                    <ActivityIndicator size="small" color="white" />
+                  ) : (
+                    <Text className="font-semibold text-white">Create Group</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </ScrollView>
-
-            <TouchableOpacity
-              onPress={handleGroupCreation}
-              disabled={creatingGroup || !groupName.trim()}
-              className={`items-center rounded-lg py-4 ${
-                creatingGroup || !groupName.trim() ? 'bg-gray-600' : 'bg-blue-600'
-              }`}>
-              {creatingGroup ? (
-                <ActivityIndicator size="small" color="white" />
-              ) : (
-                <Text className="font-semibold text-white">Create Group</Text>
-              )}
-            </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
