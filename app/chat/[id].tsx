@@ -511,6 +511,7 @@ export default function ChatScreen() {
           text: data.message,
           sender: isFromMe ? 'me' : 'other',
           sender_id: data.sender_id,
+          sender_name: data.sender_name ?? undefined,
           timestamp: new Date().toLocaleTimeString('en-US', {
             hour: '2-digit',
             minute: '2-digit',

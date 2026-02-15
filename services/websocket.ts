@@ -8,6 +8,7 @@ export interface WebSocketMessage {
 export interface WebSocketResponse {
   message: string;
   sender_id: number;
+  sender_name?: string;
   temp_id: string;
 }
 
