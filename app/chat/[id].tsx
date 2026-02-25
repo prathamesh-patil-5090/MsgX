@@ -1,9 +1,10 @@
 import { Entypo, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import AvatarImage from 'components/AvatarImage';
+import { useCall } from 'components/CallProvider';
 import OptionsModal from 'components/OptionsModal';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -21,6 +22,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import EmojiPicker, { type EmojiType } from 'rn-emoji-keyboard';
 import { cacheMessagesForSearch } from 'services/cacheService';
+import { fetchConversationById } from 'services/conversationsApi';
 import { getAccessToken, getUserId } from 'services/loginApi';
 import {
   deleteMessage,
@@ -196,6 +198,45 @@ export default function ChatScreen() {
   const [lastReadMessageId, setLastReadMessageId] = useState<number | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
+
+  // Voice call
+  const { initiateCall, isInCall } = useCall();
+  const [isStartingCall, setIsStartingCall] = useState(false);
+
+  const handleVoiceCall = useCallback(async () => {
+    if (isGroup || isInCall || isStartingCall) return;
+
+    const conversationId = Array.isArray(id) ? id[0] : (id as string);
+    if (!conversationId || !currentUserId) {
+      Alert.alert('Error', 'Unable to start call. Please try again.');
+      return;
+    }
+
+    setIsStartingCall(true);
+    try {
+      // Fetch conversation to get the other participant's ID
+      const conversation = await fetchConversationById(parseInt(conversationId));
+
+      if (!conversation.other_participant) {
+        Alert.alert('Error', 'Could not find the other participant.');
+        return;
+      }
+
+      const calleeId = conversation.other_participant.id;
+      const callerName = 'Me'; // Will be resolved server-side from token
+      const calleeDisplayName =
+        `${conversation.other_participant.first_name} ${conversation.other_participant.last_name}`.trim() ||
+        conversation.other_participant.username;
+
+      await initiateCall(calleeId, callerName, calleeDisplayName, conversationId);
+    } catch (error: any) {
+      console.error('Failed to initiate call:', error);
+      const message = error?.message || 'Failed to start call. Please try again.';
+      Alert.alert('Call Failed', message);
+    } finally {
+      setIsStartingCall(false);
+    }
+  }, [id, isGroup, isInCall, isStartingCall, currentUserId, initiateCall]);
 
   const getCacheKey = (conversationId: string) => `messages_${conversationId}`;
 
@@ -871,6 +912,17 @@ export default function ChatScreen() {
                 </View>
               </View>
             </View>
+
+            {/* Voice Call Button (DMs only) */}
+            {!isGroup && (
+              <TouchableOpacity
+                onPress={handleVoiceCall}
+                disabled={isStartingCall || isInCall}
+                className="ml-2 rounded-full p-2"
+                style={{ opacity: isStartingCall || isInCall ? 0.4 : 1 }}>
+                <Ionicons name="call" size={22} color={isInCall ? '#f87171' : '#4A9EFF'} />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Messages */}

@@ -6,14 +6,16 @@
   "build": {
     "preview": {
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://chat-app.dev-sandbox.tech"
+        "EXPO_PUBLIC_API_BASE_URL": "https://chat-app.dev-sandbox.tech",
+        "EXPO_PUBLIC_VOICE_SERVER_URL": "https://voice.dev-sandbox.tech"
       }
     },
     "internal": {
       "distribution": "internal",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://chat-app.dev-sandbox.tech"
+        "EXPO_PUBLIC_API_BASE_URL": "https://chat-app.dev-sandbox.tech",
+        "EXPO_PUBLIC_VOICE_SERVER_URL": "https://voice.dev-sandbox.tech"
       }
     }
   }
