@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { audioService } from '../services/audioService';
+import { notificationService } from '../services/notificationService';
 import {
   voiceCallService,
   formatCallDuration,
@@ -88,6 +89,7 @@ export function CallProvider({ children }: CallProviderProps) {
   const [isSpeakerOn, setIsSpeakerOn] = useState(false);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const connectedRef = useRef(false);
+  const callNotificationIdRef = useRef<string | null>(null);
 
   // Track previous status for transition detection
   const prevStatusRef = useRef<string>('idle');
@@ -174,6 +176,14 @@ export function CallProvider({ children }: CallProviderProps) {
         newState.status === 'error' ||
         newState.status === 'idle'
       ) {
+        // Dismiss incoming call notification
+        if (callNotificationIdRef.current) {
+          notificationService
+            .dismissCallNotification(callNotificationIdRef.current)
+            .catch(() => {});
+          callNotificationIdRef.current = null;
+        }
+
         // Stop any ringing/audio
         audioService.stopRingtone().catch(console.error);
         audioService.stopOutgoingRing().catch(console.error);
@@ -198,6 +208,14 @@ export function CallProvider({ children }: CallProviderProps) {
       }
 
       if (newState.status === 'rejected' || newState.status === 'missed') {
+        // Dismiss incoming call notification
+        if (callNotificationIdRef.current) {
+          notificationService
+            .dismissCallNotification(callNotificationIdRef.current)
+            .catch(() => {});
+          callNotificationIdRef.current = null;
+        }
+
         // Stop ringing
         audioService.stopRingtone().catch(console.error);
         audioService.stopOutgoingRing().catch(console.error);
@@ -221,6 +239,14 @@ export function CallProvider({ children }: CallProviderProps) {
       setIncomingCall(data);
       // Start ringtone + vibration for incoming call
       audioService.startRingtone().catch(console.error);
+
+      // Show a system notification (useful when app is in background)
+      notificationService
+        .notifyIncomingCall(data.callId, data.callerName, data.conversationId ?? undefined)
+        .then((nId) => {
+          callNotificationIdRef.current = nId;
+        })
+        .catch(console.error);
     });
 
     return () => {
@@ -255,6 +281,11 @@ export function CallProvider({ children }: CallProviderProps) {
     try {
       // Stop ringtone immediately on accept
       await audioService.stopRingtone();
+      // Dismiss call notification
+      if (callNotificationIdRef.current) {
+        notificationService.dismissCallNotification(callNotificationIdRef.current).catch(() => {});
+        callNotificationIdRef.current = null;
+      }
       setIncomingCall(null);
       setShowCallScreen(true);
       await voiceCallService.acceptCall();
@@ -267,6 +298,11 @@ export function CallProvider({ children }: CallProviderProps) {
     try {
       // Stop ringtone immediately on reject
       await audioService.stopRingtone();
+      // Dismiss call notification
+      if (callNotificationIdRef.current) {
+        notificationService.dismissCallNotification(callNotificationIdRef.current).catch(() => {});
+        callNotificationIdRef.current = null;
+      }
       setIncomingCall(null);
       await voiceCallService.rejectCall();
     } catch (error: any) {

@@ -15,11 +15,10 @@
 // ────────────────────────────────────────────────────────────────────────────
 
 // Uncomment these lines once you've added the sound files:
-// export const RINGTONE = require('./ringtone.mp3');
+export const RINGTONE = require('./incoming_call.mp3');
 // export const OUTGOING_RING = require('./outgoing_ring.mp3');
 // export const CALL_END = require('./call_end.mp3');
 
 // Placeholder exports — the audio service checks for null/undefined
-export const RINGTONE: number | null = null;
 export const OUTGOING_RING: number | null = null;
 export const CALL_END: number | null = null;

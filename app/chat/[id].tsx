@@ -24,6 +24,7 @@ import EmojiPicker, { type EmojiType } from 'rn-emoji-keyboard';
 import { cacheMessagesForSearch } from 'services/cacheService';
 import { fetchConversationById } from 'services/conversationsApi';
 import { getAccessToken, getUserId } from 'services/loginApi';
+import { notificationService } from 'services/notificationService';
 import {
   deleteMessage,
   fetchMessages,
@@ -415,6 +416,10 @@ export default function ChatScreen() {
   useEffect(() => {
     const initialize = async () => {
       if (!id) return;
+
+      // Dismiss any notifications for this conversation
+      const conversationIdStr = Array.isArray(id) ? id[0] : id;
+      notificationService.dismissConversationNotifications(conversationIdStr).catch(console.error);
 
       try {
         let userIdStr = await getUserId();

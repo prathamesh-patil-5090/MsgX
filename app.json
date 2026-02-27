@@ -17,6 +17,12 @@
           "cameraPermission": false,
           "microphonePermission": "Allow MsgX to access your microphone for voice calls"
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "sounds": ["./assets/sounds/incoming_call.mp3"]
+        }
       ]
     ],
     "orientation": "portrait",
@@ -46,7 +52,9 @@
     "RECORD_AUDIO",
     "MODIFY_AUDIO_SETTINGS",
     "INTERNET",
-    "ACCESS_NETWORK_STATE"
+    "ACCESS_NETWORK_STATE",
+    "POST_NOTIFICATIONS",
+    "VIBRATE"
   ]
 },
     "extra": {
