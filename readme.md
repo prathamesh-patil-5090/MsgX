@@ -10,4 +10,6 @@ To start the mobile app, navigate to the MsgX directory and run the following co
 cd MsgX
 npm i
 npx expo start -c
+or
+npm run android
 ```
