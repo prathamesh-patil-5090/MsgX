@@ -22,7 +22,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import EmojiPicker, { type EmojiType } from 'rn-emoji-keyboard';
 import { cacheMessagesForSearch } from 'services/cacheService';
-import { fetchConversationById } from 'services/conversationsApi';
+import { fetchConversationById, fetchParticipants } from 'services/conversationsApi';
 import { getAccessToken, getUserId } from 'services/loginApi';
 import { notificationService } from 'services/notificationService';
 import {
@@ -122,13 +122,10 @@ const processApiMessages = (results: MessageResponse[], userId: number): Message
     }
   }
 
-  // DB-messages content signatures — used to drop Kafka duplicates
   const dbSignatures = new Set(withTime.map((m) => `${m.sender.id}|${m.content}`));
 
-  // Only keep pending messages not already present in DB results
   const uniquePending = withoutTime.filter((m) => !dbSignatures.has(`${m.sender.id}|${m.content}`));
 
-  // DB messages sorted oldest → newest, then unique pending (newest) at end
   const combined = [
     ...withTime.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
     ...uniquePending,
@@ -143,13 +140,12 @@ const processApiMessages = (results: MessageResponse[], userId: number): Message
  * with matching content+sender exists, the WS version is dropped.
  */
 const deduplicateMessages = (msgs: Message[]): Message[] => {
-  const seen = new Map<string, number>(); // id -> index in result
+  const seen = new Map<string, number>();
   const result: Message[] = [];
 
   for (const msg of msgs) {
     const existingIdx = seen.get(msg.id);
     if (existingIdx !== undefined) {
-      // Same id: keep whichever is NOT pending
       if (msg.isPending) continue;
       result[existingIdx] = msg;
     } else {
@@ -158,7 +154,6 @@ const deduplicateMessages = (msgs: Message[]): Message[] => {
     }
   }
 
-  // Build a set of API message signatures for content-based dedup
   const apiSignatures = new Set<string>();
   for (const msg of result) {
     if (!msg.id.startsWith('ws_') && !msg.id.startsWith('pending_')) {
@@ -166,7 +161,6 @@ const deduplicateMessages = (msgs: Message[]): Message[] => {
     }
   }
 
-  // Remove WS/pending messages that have an API equivalent
   return result.filter((msg) => {
     if (msg.id.startsWith('ws_') || msg.id.startsWith('pending_')) {
       return !apiSignatures.has(`${msg.sender_id}|${msg.text}`);
@@ -200,12 +194,11 @@ export default function ChatScreen() {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
-  // Voice call
-  const { initiateCall, isInCall } = useCall();
+  const { initiateCall, initiateGroupCall, isInCall } = useCall();
   const [isStartingCall, setIsStartingCall] = useState(false);
 
   const handleVoiceCall = useCallback(async () => {
-    if (isGroup || isInCall || isStartingCall) return;
+    if (isInCall || isStartingCall) return;
 
     const conversationId = Array.isArray(id) ? id[0] : (id as string);
     if (!conversationId || !currentUserId) {
@@ -215,21 +208,33 @@ export default function ChatScreen() {
 
     setIsStartingCall(true);
     try {
-      // Fetch conversation to get the other participant's ID
-      const conversation = await fetchConversationById(parseInt(conversationId));
+      if (isGroup) {
+        const participants = await fetchParticipants(parseInt(conversationId));
+        const participantIds = participants.map((p) => p.user.id);
 
-      if (!conversation.other_participant) {
-        Alert.alert('Error', 'Could not find the other participant.');
-        return;
+        if (participantIds.length <= 1) {
+          Alert.alert('Error', 'Not enough participants for a group call.');
+          return;
+        }
+
+        const groupDisplayName = chatName || 'Group Call';
+        await initiateGroupCall(participantIds, 'Me', conversationId, groupDisplayName);
+      } else {
+        const conversation = await fetchConversationById(parseInt(conversationId));
+
+        if (!conversation.other_participant) {
+          Alert.alert('Error', 'Could not find the other participant.');
+          return;
+        }
+
+        const calleeId = conversation.other_participant.id;
+        const callerName = 'Me';
+        const calleeDisplayName =
+          `${conversation.other_participant.first_name} ${conversation.other_participant.last_name}`.trim() ||
+          conversation.other_participant.username;
+
+        await initiateCall(calleeId, callerName, calleeDisplayName, conversationId);
       }
-
-      const calleeId = conversation.other_participant.id;
-      const callerName = 'Me'; // Will be resolved server-side from token
-      const calleeDisplayName =
-        `${conversation.other_participant.first_name} ${conversation.other_participant.last_name}`.trim() ||
-        conversation.other_participant.username;
-
-      await initiateCall(calleeId, callerName, calleeDisplayName, conversationId);
     } catch (error: any) {
       console.error('Failed to initiate call:', error);
       const message = error?.message || 'Failed to start call. Please try again.';
@@ -237,7 +242,72 @@ export default function ChatScreen() {
     } finally {
       setIsStartingCall(false);
     }
-  }, [id, isGroup, isInCall, isStartingCall, currentUserId, initiateCall]);
+  }, [
+    id,
+    isGroup,
+    isInCall,
+    isStartingCall,
+    currentUserId,
+    initiateCall,
+    initiateGroupCall,
+    chatName,
+  ]);
+
+  const handleVideoCall = useCallback(async () => {
+    if (isInCall || isStartingCall) return;
+
+    const conversationId = Array.isArray(id) ? id[0] : (id as string);
+    if (!conversationId || !currentUserId) {
+      Alert.alert('Error', 'Unable to start call. Please try again.');
+      return;
+    }
+
+    setIsStartingCall(true);
+    try {
+      if (isGroup) {
+        const participants = await fetchParticipants(parseInt(conversationId));
+        const participantIds = participants.map((p) => p.user.id);
+
+        if (participantIds.length <= 1) {
+          Alert.alert('Error', 'Not enough participants for a group call.');
+          return;
+        }
+
+        const groupDisplayName = chatName || 'Group Call';
+        await initiateGroupCall(participantIds, 'Me', conversationId, groupDisplayName, true);
+      } else {
+        const conversation = await fetchConversationById(parseInt(conversationId));
+
+        if (!conversation.other_participant) {
+          Alert.alert('Error', 'Could not find the other participant.');
+          return;
+        }
+
+        const calleeId = conversation.other_participant.id;
+        const callerName = 'Me';
+        const calleeDisplayName =
+          `${conversation.other_participant.first_name} ${conversation.other_participant.last_name}`.trim() ||
+          conversation.other_participant.username;
+
+        await initiateCall(calleeId, callerName, calleeDisplayName, conversationId, true);
+      }
+    } catch (error: any) {
+      console.error('Failed to initiate video call:', error);
+      const message = error?.message || 'Failed to start video call. Please try again.';
+      Alert.alert('Call Failed', message);
+    } finally {
+      setIsStartingCall(false);
+    }
+  }, [
+    id,
+    isGroup,
+    isInCall,
+    isStartingCall,
+    currentUserId,
+    initiateCall,
+    initiateGroupCall,
+    chatName,
+  ]);
 
   const getCacheKey = (conversationId: string) => `messages_${conversationId}`;
 
@@ -278,14 +348,12 @@ export default function ChatScreen() {
     }
   };
 
-  // Sync current messages state to cache (call after any mutation)
   const syncCache = (updatedMessages?: Message[]) => {
     const conversationId = Array.isArray(id) ? id[0] : (id as string);
     if (!conversationId) return;
     const msgs = updatedMessages ?? messages;
     cacheMessages(conversationId, msgs, nextPage).catch(console.error);
 
-    // Also sync search cache
     const searchMsgs = msgs
       .filter((m) => m.sender_id !== undefined && m.sender_name !== undefined)
       .map((m) => ({
@@ -316,19 +384,14 @@ export default function ChatScreen() {
 
       const uiMessages = processApiMessages(response.results, userId);
 
-      // Always use functional update to avoid overwriting concurrent sends
       setMessages((prev) => {
         if (showRefreshing) {
-          // Merge: API is source-of-truth for persisted messages,
-          // but keep any recent WS/optimistic messages not yet confirmed by API
           const apiIds = new Set(uiMessages.map((m) => m.id));
           const pendingMsgs = prev.filter(
             (m) => (m.id.startsWith('ws_') || m.id.startsWith('pending_')) && !apiIds.has(m.id)
           );
           return deduplicateMessages([...uiMessages, ...pendingMsgs]);
         } else {
-          // First load: keep any optimistic messages that were added
-          // concurrently while API was loading
           const optimistic = prev.filter(
             (m) => m.id.startsWith('pending_') || m.id.startsWith('ws_')
           );
@@ -338,7 +401,6 @@ export default function ChatScreen() {
       setNextPage(response.next);
       await cacheMessages(conversationId, uiMessages, response.next);
 
-      // Sync search cache
       const searchMsgs = uiMessages.map((msg) => ({
         id: msg.id,
         content: msg.text,
@@ -384,7 +446,6 @@ export default function ChatScreen() {
       if (data.results && data.results.messages && Array.isArray(data.results.messages)) {
         const newMessages = processApiMessages(data.results.messages, currentUserId);
 
-        // Deduplicate to handle pagination overlap
         const updatedMessages = deduplicateMessages([...newMessages, ...messages]);
         setMessages(updatedMessages);
         setNextPage(data.next);
@@ -417,7 +478,6 @@ export default function ChatScreen() {
     const initialize = async () => {
       if (!id) return;
 
-      // Dismiss any notifications for this conversation
       const conversationIdStr = Array.isArray(id) ? id[0] : id;
       notificationService.dismissConversationNotifications(conversationIdStr).catch(console.error);
 
@@ -446,17 +506,9 @@ export default function ChatScreen() {
 
         const conversationId = Array.isArray(id) ? id[0] : id;
 
-        // 1. Show cached messages instantly (no loading spinner)
         const cachedMsgs = await loadCachedMessages(conversationId, userId);
 
-        // 2. Silently refresh from API in background
-        //    If no cache, show loading spinner briefly
-        const loadedMessages =
-          (await loadMessages(
-            conversationId,
-            userId,
-            !!cachedMsgs // showRefreshing=true when we have cache (no spinner)
-          )) || [];
+        const loadedMessages = (await loadMessages(conversationId, userId, !!cachedMsgs)) || [];
 
         if (highlightMessage === 'true' && messageId) {
           setHighlightedMessageId(Array.isArray(messageId) ? messageId[0] : messageId);
@@ -478,13 +530,11 @@ export default function ChatScreen() {
             setHighlightedMessageId(null);
           }, 3000);
         } else {
-          // Normal scroll to bottom
           setTimeout(() => {
             flatListRef.current?.scrollToEnd({ animated: false });
           }, 100);
         }
 
-        // Mark latest message as read
         if (loadedMessages.length > 0) {
           const latestMessage = loadedMessages[loadedMessages.length - 1];
           if (latestMessage.sender === 'other' && latestMessage.id) {
@@ -494,7 +544,6 @@ export default function ChatScreen() {
               setLastReadMessageId(messageId);
             } catch (error) {
               console.error('Error marking message as read:', error);
-              // Don't show alert for this, it's not critical
             }
           }
         }
@@ -505,10 +554,8 @@ export default function ChatScreen() {
     };
 
     initialize();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // WebSocket connection effect
   useEffect(() => {
     if (!id) return;
 
@@ -526,29 +573,23 @@ export default function ChatScreen() {
       }
     };
 
-    // Connect WebSocket immediately (no delay)
     connectWebSocket();
 
-    // Set up message handler
     const unsubscribeMessage = websocketService.onMessage((data: WebSocketResponse) => {
       const currentUserIdValue = currentUserIdRef.current;
 
-      // Use functional update to avoid dependency on messages
       setMessages((prev) => {
         const senderId = parseInt(data.sender_id.toString());
         const currentUserIdNum =
           currentUserIdValue !== null ? parseInt(currentUserIdValue.toString()) : null;
         const isFromMe = currentUserIdNum !== null && senderId === currentUserIdNum;
 
-        // Ensure temp_id is a string for consistent comparison
         const tempIdStr = data.temp_id.toString();
 
-        // Deduplicate: skip if this exact WS message already exists
         if (prev.some((m) => m.id === `ws_${tempIdStr}`)) {
           return prev;
         }
 
-        // Replace optimistic (pending) message if it matches this temp_id
         const hadPending = prev.some((m) => m.temp_id === tempIdStr);
         const filtered = hadPending ? prev.filter((m) => m.temp_id !== tempIdStr) : prev;
 
@@ -566,17 +607,14 @@ export default function ChatScreen() {
           temp_id: tempIdStr,
         };
 
-        // Scroll to bottom after adding message
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: false });
         }, 50);
 
         const updatedMessages = deduplicateMessages([...filtered, newMessage]);
 
-        // Sync cache with new message
         syncCache(updatedMessages);
 
-        // Mark as read if it's from another user
         if (!isFromMe && id) {
           const conversationId = Array.isArray(id) ? id[0] : id;
           const numericId = parseInt(newMessage.id.replace('ws_', ''));
@@ -595,7 +633,6 @@ export default function ChatScreen() {
       });
     });
 
-    // Set up connection status handlers
     const unsubscribeOpen = websocketService.onOpen(() => {
       setIsConnected(true);
       setIsConnecting(false);
@@ -610,7 +647,6 @@ export default function ChatScreen() {
       setIsConnected(false);
     });
 
-    // Cleanup on unmount
     return () => {
       unsubscribeMessage();
       unsubscribeOpen();
@@ -618,7 +654,6 @@ export default function ChatScreen() {
       unsubscribeError();
       websocketService.disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const handleRefresh = async () => {
@@ -636,11 +671,10 @@ export default function ChatScreen() {
     if (message) {
       setInputText(message.text);
       setEditingMessageId(messageId);
-      setSelectedMessageId(null); // Close options modal
+      setSelectedMessageId(null);
     }
   };
 
-  // Handle delete message - show confirmation alert
   const handleDeleteMessage = (messageId: string) => {
     Alert.alert(
       'Delete Message',
@@ -675,7 +709,6 @@ export default function ChatScreen() {
     );
   };
 
-  // Cancel editing
   const handleCancelEdit = () => {
     setEditingMessageId(null);
     setInputText('');
@@ -688,18 +721,15 @@ export default function ChatScreen() {
 
   const handleSend = async () => {
     if (inputText.trim()) {
-      // If editing, update the existing message
       if (editingMessageId) {
         const messageText = inputText.trim();
         try {
-          // Call update API
           const updatedMessage = await updateMessage(
             Number(id),
             Number(editingMessageId),
             messageText
           );
 
-          // Update message in UI + sync cache
           setMessages((prev) => {
             const updated = prev.map((msg) =>
               msg.id === editingMessageId
@@ -730,11 +760,10 @@ export default function ChatScreen() {
       const messageText = inputText.trim();
       setInputText('');
 
-      // Try WebSocket first, fall back to REST API
       if (websocketService.isConnected()) {
         try {
           const tempId = websocketService.sendMessage(messageText);
-          // Show optimistic message immediately
+
           const optimisticMsg: Message = {
             id: `pending_${tempId}`,
             text: messageText,
@@ -764,12 +793,10 @@ export default function ChatScreen() {
     }
   };
 
-  // REST API fallback for sending messages
   const sendViaRest = async (messageText: string) => {
     const tempId = `rest_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const userId = currentUserIdRef.current;
 
-    // Show optimistic message immediately so it doesn't vanish
     const optimisticMsg: Message = {
       id: `pending_${tempId}`,
       text: messageText,
@@ -794,11 +821,7 @@ export default function ChatScreen() {
       const conversationId = Array.isArray(id) ? id[0] : (id as string);
       const response = await sendMessage(parseInt(conversationId), messageText);
 
-      // Backend returns { status: "queued", temp_id, payload } (HTTP 202).
-      // The message is queued; it will appear in the next API fetch.
-      // Keep the optimistic message until then (it will be deduped on refresh).
       if (response && typeof response === 'object' && 'id' in response && 'sender' in response) {
-        // In case the backend returns a full MessageResponse:
         if (userId) {
           const uiMsg = convertApiMessageToUIMessage(response, userId);
           setMessages((prev) => {
@@ -808,10 +831,9 @@ export default function ChatScreen() {
           });
         }
       }
-      // If it's the "queued" response, optimistic message stays until next API load
     } catch (error) {
       console.error('REST send failed:', error);
-      // Remove optimistic message and restore input
+
       setMessages((prev) => {
         const updated = prev.filter((m) => m.id !== `pending_${tempId}`);
         syncCache(updated);
@@ -827,11 +849,9 @@ export default function ChatScreen() {
     const isOptionsOpen = selectedMessageId === item.id;
     const displayName = isMe ? 'You' : item.sender_name || chatName;
 
-    // Determine if message is read (compare with last read message ID)
     const messageIdNum = parseInt(item.id);
     const isRead = lastReadMessageId !== null && messageIdNum <= lastReadMessageId;
 
-    // Check if this message is highlighted
     const isHighlighted = highlightedMessageId === item.id;
 
     return (
@@ -866,10 +886,8 @@ export default function ChatScreen() {
           {isMe && (
             <View className="ml-1">
               {isRead ? (
-                // Double tick (read)
                 <Ionicons name="checkmark-done" size={14} color="#4A9EFF" />
               ) : (
-                // Single tick (sent)
                 <Ionicons name="checkmark" size={14} color="#666" />
               )}
             </View>
@@ -882,9 +900,9 @@ export default function ChatScreen() {
   return (
     <SafeAreaView className="flex-1" edges={['top', 'bottom']}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
         style={{ flex: 1 }}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}>
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 1}>
         <ImageBackground
           source={require('../../assets/background_Img.jpg')}
           className="flex-1"
@@ -918,16 +936,23 @@ export default function ChatScreen() {
               </View>
             </View>
 
-            {/* Voice Call Button (DMs only) */}
-            {!isGroup && (
-              <TouchableOpacity
-                onPress={handleVoiceCall}
-                disabled={isStartingCall || isInCall}
-                className="ml-2 rounded-full p-2"
-                style={{ opacity: isStartingCall || isInCall ? 0.4 : 1 }}>
-                <Ionicons name="call" size={22} color={isInCall ? '#f87171' : '#4A9EFF'} />
-              </TouchableOpacity>
-            )}
+            {/* Video Call Button */}
+            <TouchableOpacity
+              onPress={handleVideoCall}
+              disabled={isStartingCall || isInCall}
+              className="ml-1 rounded-full p-2"
+              style={{ opacity: isStartingCall || isInCall ? 0.4 : 1 }}>
+              <Ionicons name="videocam" size={22} color={isInCall ? '#f87171' : '#4A9EFF'} />
+            </TouchableOpacity>
+
+            {/* Voice Call Button */}
+            <TouchableOpacity
+              onPress={handleVoiceCall}
+              disabled={isStartingCall || isInCall}
+              className="ml-1 rounded-full p-2"
+              style={{ opacity: isStartingCall || isInCall ? 0.4 : 1 }}>
+              <Ionicons name="call" size={22} color={isInCall ? '#f87171' : '#4A9EFF'} />
+            </TouchableOpacity>
           </View>
 
           {/* Messages */}
@@ -955,14 +980,12 @@ export default function ChatScreen() {
               keyboardDismissMode="on-drag"
               showsVerticalScrollIndicator={true}
               onContentSizeChange={() => {
-                // Only auto-scroll if not highlighting a message
                 if (!highlightMessage || highlightMessage !== 'true') {
                   flatListRef.current?.scrollToEnd({ animated: false });
                 }
               }}
               onEndReached={loadMoreMessages}
               onScrollToIndexFailed={(info) => {
-                // Handle scroll to index failure
                 const wait = new Promise((resolve) => setTimeout(resolve, 500));
                 wait.then(() => {
                   flatListRef.current?.scrollToIndex({

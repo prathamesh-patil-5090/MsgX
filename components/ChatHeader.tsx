@@ -23,18 +23,14 @@ export default function ChatHeader({ onSearchFocus, onSearchBlur }: ChatHeaderPr
   const loadUserInitials = async () => {
     console.log('[ChatHeader] Loading user profile...');
 
-    // Set initial fallback immediately to ensure button always shows something
     setUserInitials('TU');
     setIsLoading(true);
 
-    const result = await withAuthErrorHandling(
-      async () => {
-        const response = await getCurrentUserProfile();
-        console.log('[ChatHeader] Profile response:', response);
-        return response;
-      },
-      false // Don't show alert on error
-    );
+    const result = await withAuthErrorHandling(async () => {
+      const response = await getCurrentUserProfile();
+      console.log('[ChatHeader] Profile response:', response);
+      return response;
+    }, false);
 
     if (result) {
       const initials = `${result.user.first_name.charAt(0)}${result.user.last_name.charAt(0)}`;
@@ -44,7 +40,6 @@ export default function ChatHeader({ onSearchFocus, onSearchBlur }: ChatHeaderPr
       setUserProfile(result.user);
     } else {
       console.warn('[ChatHeader] Failed to load profile, keeping fallback');
-      // Keep the fallback 'TU' that was set earlier
     }
 
     setIsLoading(false);
@@ -52,7 +47,6 @@ export default function ChatHeader({ onSearchFocus, onSearchBlur }: ChatHeaderPr
 
   const handleProfilePress = () => {
     if (userProfile) {
-      // Pass profile data to avoid re-fetching
       router.push({
         pathname: '/profile',
         params: {
@@ -60,7 +54,6 @@ export default function ChatHeader({ onSearchFocus, onSearchBlur }: ChatHeaderPr
         },
       });
     } else {
-      // No profile data, let profile page handle loading
       router.push('/profile');
     }
   };

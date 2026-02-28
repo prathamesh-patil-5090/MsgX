@@ -150,3 +150,35 @@ export const deleteConversation = async (conversationId: number): Promise<void> 
     throw error;
   }
 };
+
+export interface Participant {
+  id: number;
+  user: OtherParticipant;
+  joined_at: string;
+  is_admin: boolean;
+}
+
+/**
+ * Fetch participants of a conversation
+ * @param conversationId - The conversation ID
+ * @returns List of participants
+ */
+export const fetchParticipants = async (conversationId: number): Promise<Participant[]> => {
+  try {
+    const response = await authenticatedFetch(
+      `/chat/api/conversations/${conversationId}/participants/`,
+      { method: 'GET' }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `Failed to fetch participants: ${response.status}`);
+    }
+
+    const data: Participant[] = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error fetching participants:', error);
+    throw error;
+  }
+};

@@ -40,7 +40,6 @@ export default function RegisterIndex() {
       });
       console.log('Register successful:', response);
 
-      // Small delay to ensure tokens are stored
       setTimeout(() => {
         router.replace('/(tabs)/dm/');
       }, 100);
@@ -51,7 +50,6 @@ export default function RegisterIndex() {
           ? error.message
           : 'An error occurred during registration. Please try again.';
 
-      // Handle specific AsyncStorage errors
       if (errorMessage.includes('[AsyncStorage]') || errorMessage.includes('null/undefined')) {
         Alert.alert(
           'Registration Error',
@@ -78,7 +76,7 @@ export default function RegisterIndex() {
         }
       } catch (error) {
         console.error('Error checking existing login:', error);
-        // Clear any corrupted tokens
+
         try {
           const { clearTokens } = await import('../../services/loginApi');
           await clearTokens();
@@ -96,8 +94,7 @@ export default function RegisterIndex() {
         <ScrollView
           contentContainerStyle={{ flexGrow: 1 }}
           keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+          showsVerticalScrollIndicator={false}>
           <View className="flex-grow items-center justify-center px-8 py-12">
             {/* Logo/Brand Section */}
             <View className="mb-8 items-center">

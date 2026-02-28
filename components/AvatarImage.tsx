@@ -17,16 +17,16 @@ const getInitials = (name: string): string => {
 
 const getColorFromName = (name: string): string => {
   const colors = [
-    '#FF6B6B', // Red
-    '#4ECDC4', // Teal
-    '#45B7D1', // Blue
-    '#FFA07A', // Light Salmon
-    '#98D8C8', // Mint
-    '#F7DC6F', // Yellow
-    '#BB8FCE', // Purple
-    '#85C1E2', // Sky Blue
-    '#F8B88B', // Peach
-    '#A8E6CF', // Light Green
+    '#FF6B6B',
+    '#4ECDC4',
+    '#45B7D1',
+    '#FFA07A',
+    '#98D8C8',
+    '#F7DC6F',
+    '#BB8FCE',
+    '#85C1E2',
+    '#F8B88B',
+    '#A8E6CF',
   ];
 
   let hash = 0;
@@ -38,25 +38,13 @@ const getColorFromName = (name: string): string => {
   return colors[index];
 };
 
-export default function AvatarImage({
-  source,
-  name,
-  size = 64,
-  textSize
-}: AvatarImageProps) {
+export default function AvatarImage({ source, name, size = 64, textSize }: AvatarImageProps) {
   const calculatedTextSize = textSize || size * 0.4;
 
-  // If we have a valid image source, show the image
   if (source) {
-    return (
-      <Image
-        source={source}
-        style={{ width: size, height: size, borderRadius: size / 2 }}
-      />
-    );
+    return <Image source={source} style={{ width: size, height: size, borderRadius: size / 2 }} />;
   }
 
-  // Otherwise show text-based avatar with initials
   const initials = getInitials(name);
   const backgroundColor = getColorFromName(name);
 

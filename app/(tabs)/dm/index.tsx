@@ -27,7 +27,6 @@ import {
 } from 'services/conversationsWebSocket';
 import '../../../global.css';
 
-// Helper function to format timestamp
 const formatMessageTime = (timestamp: string): string => {
   const date = new Date(timestamp);
   const now = new Date();
@@ -35,7 +34,6 @@ const formatMessageTime = (timestamp: string): string => {
   const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
 
   if (diffInDays === 0) {
-    // Today - show time
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
@@ -44,10 +42,8 @@ const formatMessageTime = (timestamp: string): string => {
   } else if (diffInDays === 1) {
     return 'Yesterday';
   } else if (diffInDays < 7) {
-    // Within a week - show day name
     return date.toLocaleDateString('en-US', { weekday: 'short' });
   } else {
-    // Older - show date
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -55,7 +51,6 @@ const formatMessageTime = (timestamp: string): string => {
   }
 };
 
-// Convert API response to ConversationList format
 const convertToConversationFormat = (apiConversation: ConversationResponse): Conversation => {
   return {
     id: apiConversation.id.toString(),
@@ -95,7 +90,6 @@ export default function DMScreen() {
       const formattedConversations = result.results.map(convertToConversationFormat);
       setConversations(formattedConversations);
 
-      // Cache conversations for search
       try {
         await cacheConversations(formattedConversations, 'dm');
       } catch (cacheError) {
@@ -113,7 +107,6 @@ export default function DMScreen() {
     loadConversations();
   }, [loadConversations]);
 
-  // WebSocket for real-time conversation updates
   useEffect(() => {
     conversationsWebSocketService.connect().catch(console.error);
 
@@ -197,7 +190,6 @@ export default function DMScreen() {
     };
   }, []);
 
-  // Refresh conversations when screen comes into focus
   useFocusEffect(
     useCallback(() => {
       if (conversationsWebSocketService.isConnected()) {
@@ -216,12 +208,10 @@ export default function DMScreen() {
 
   const handleDeleteConversations = async (ids: string[]) => {
     const result = await withAuthErrorHandling(async () => {
-      // Delete conversations from backend
       await Promise.all(ids.map((id) => deleteConversation(parseInt(id))));
     });
 
     if (result !== null) {
-      // Update local state
       setConversations((prev) => prev.filter((c) => !ids.includes(c.id)));
     } else {
       setError('Failed to delete conversations');
@@ -229,7 +219,6 @@ export default function DMScreen() {
   };
 
   const handleConversationPress = (conversation: Conversation) => {
-    // Optimistically update the unread count to 0 when opening a conversation
     setConversations((prev) =>
       prev.map((conv) =>
         conv.id === conversation.id ? { ...conv, unreadCount: 0, status: 'read' as const } : conv
@@ -250,7 +239,6 @@ export default function DMScreen() {
     router.push('/add');
   };
 
-  // Loading state
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-black" edges={['top', 'bottom']}>
@@ -263,7 +251,6 @@ export default function DMScreen() {
     );
   }
 
-  // Error state
   if (error) {
     return (
       <SafeAreaView className="flex-1 bg-black" edges={['top', 'bottom']}>

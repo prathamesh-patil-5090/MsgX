@@ -49,7 +49,6 @@ export default function ProfileIndex() {
   };
 
   useEffect(() => {
-    // Check if profile data was passed via navigation params
     if (params.profileData) {
       try {
         const passedProfile = JSON.parse(params.profileData as string);
@@ -62,7 +61,6 @@ export default function ProfileIndex() {
       }
     }
 
-    // No passed data or parsing failed, load from API
     loadProfile();
   }, [params.profileData]);
 
@@ -94,8 +92,6 @@ export default function ProfileIndex() {
       setLoggingOut(true);
       await logoutApi();
 
-      // Clear any cached data
-      // Note: You might want to add more cache clearing here
       console.log('Logout successful, redirecting to login');
 
       router.replace('/login');

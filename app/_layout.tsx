@@ -16,19 +16,16 @@ export default function RootLayout() {
   const pathnameRef = useRef(pathname);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
-  // Keep pathname ref in sync
   useEffect(() => {
     pathnameRef.current = pathname;
   }, [pathname]);
 
-  // Initialize notifications + global new-message listener
   useEffect(() => {
     let unsubscribeWS: (() => void) | null = null;
 
     const setup = async () => {
       await notificationService.initialize();
 
-      // Subscribe to conversation updates for notifications
       unsubscribeWS = conversationsWebSocketService.onEvent(async (event: ConversationsWSEvent) => {
         if (event.type !== 'conversation_update' || event.action !== 'new_message') return;
 
@@ -36,11 +33,9 @@ export default function RootLayout() {
         const msg = conv.latest_message;
         if (!msg) return;
 
-        // Don't notify for our own messages
         const myId = await getUserId();
         if (myId && msg.sender_id.toString() === myId) return;
 
-        // Don't notify if the user has the specific chat open & app is active
         const currentPath = pathnameRef.current;
         const isInChat = currentPath === `/chat/${conv.id}`;
         if (isInChat && appStateRef.current === 'active') return;
@@ -60,7 +55,6 @@ export default function RootLayout() {
 
     setup().catch(console.error);
 
-    // Track app state for notification suppression
     const subscription = AppState.addEventListener('change', (next: AppStateStatus) => {
       appStateRef.current = next;
     });

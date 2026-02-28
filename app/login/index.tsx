@@ -35,7 +35,6 @@ export default function LoginIndex() {
       });
       console.log('Login successful:', response);
 
-      // Small delay to ensure tokens are stored
       setTimeout(() => {
         router.replace('/(tabs)/dm/');
       }, 100);
@@ -46,7 +45,6 @@ export default function LoginIndex() {
           ? error.message
           : 'An error occurred during login. Please try again.';
 
-      // Handle specific AsyncStorage errors
       if (errorMessage.includes('[AsyncStorage]') || errorMessage.includes('null/undefined')) {
         Alert.alert(
           'Login Error',
@@ -71,7 +69,7 @@ export default function LoginIndex() {
         }
       } catch (error) {
         console.error('Error checking existing login:', error);
-        // Clear any corrupted tokens
+
         try {
           const { clearTokens } = await import('../../services/loginApi');
           await clearTokens();

@@ -70,9 +70,7 @@ export const fetchMessages = async (
       throw new Error('Invalid JSON response from server');
     }
 
-    // Handle different response formats
     if (Array.isArray(data)) {
-      // API returned array directly
       console.log(`[messagesApi] Response is array, length: ${data.length}`);
       return {
         count: data.length,
@@ -81,11 +79,9 @@ export const fetchMessages = async (
         results: data,
       };
     } else if (data.results && Array.isArray(data.results)) {
-      // API returned paginated response with direct array
       console.log(`[messagesApi] Response has results array, length: ${data.results.length}`);
       return data as MessagesListResponse;
     } else if (data.results && data.results.messages && Array.isArray(data.results.messages)) {
-      // API returned paginated response with nested messages array
       console.log(
         `[messagesApi] Response has nested messages array, length: ${data.results.messages.length}`
       );
@@ -96,7 +92,6 @@ export const fetchMessages = async (
         results: data.results.messages,
       };
     } else {
-      // Unexpected format
       console.error('[messagesApi] Unexpected API response format:', data);
       console.error('[messagesApi] Data keys:', Object.keys(data || {}));
       return {

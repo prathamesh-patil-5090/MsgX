@@ -46,14 +46,12 @@ const AnimatedConversationItem = ({
   onLongPress: () => void;
   onPress: () => void;
 }) => {
-  // Animated values
   const scale = useSharedValue(1);
   const checkScale = useSharedValue(0);
   const checkOpacity = useSharedValue(0);
   const borderOpacity = useSharedValue(1);
   const backgroundColor = useSharedValue(0);
 
-  // Update animations when selection changes
   React.useEffect(() => {
     if (isSelected) {
       scale.value = withSpring(0.98, { damping: 15, stiffness: 150 });

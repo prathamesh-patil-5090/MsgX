@@ -9,18 +9,17 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { audioService } from '../services/audioService';
+import { audioService, type AudioOutputRoute } from '../services/audioService';
 import { notificationService } from '../services/notificationService';
 import {
   voiceCallService,
   formatCallDuration,
   type CallState,
   type IncomingCallData,
+  type GroupParticipant,
 } from '../services/voiceCallService';
 import IncomingCallScreen from './IncomingCallScreen';
 import VoiceCallScreen from './VoiceCallScreen';
-
-// ─── Context Types ─────────────────────────────────────────────────────────
 
 interface CallContextValue {
   callState: CallState;
@@ -28,14 +27,27 @@ interface CallContextValue {
     calleeId: number,
     callerName: string,
     calleeName: string,
-    conversationId?: string
+    conversationId?: string,
+    isVideoCall?: boolean
+  ) => Promise<void>;
+  initiateGroupCall: (
+    participantIds: number[],
+    callerName: string,
+    conversationId: string,
+    groupName: string,
+    isVideoCall?: boolean
   ) => Promise<void>;
   acceptCall: () => Promise<void>;
   rejectCall: () => Promise<void>;
   endCall: () => Promise<void>;
   toggleMute: () => void;
+  cycleAudioOutput: () => Promise<void>;
   toggleSpeaker: () => Promise<void>;
+  toggleCamera: () => Promise<void>;
+  switchCamera: () => Promise<void>;
+  upgradeToVideo: () => Promise<void>;
   isSpeakerOn: boolean;
+  audioRoute: AudioOutputRoute;
   isInCall: boolean;
   isCallMinimized: boolean;
   minimizeCall: () => void;
@@ -54,17 +66,32 @@ const defaultCallState: CallState = {
   isPeerMuted: false,
   duration: 0,
   error: null,
+  isGroupCall: false,
+  groupName: null,
+  participants: [],
+  isVideoCall: false,
+  isCameraOn: false,
+  isFrontCamera: true,
+  isPeerCameraOn: false,
+  localVideoStreamURL: null,
+  remoteVideoStreamURL: null,
 };
 
 const CallContext = createContext<CallContextValue>({
   callState: defaultCallState,
   initiateCall: async () => {},
+  initiateGroupCall: async () => {},
   acceptCall: async () => {},
   rejectCall: async () => {},
   endCall: async () => {},
   toggleMute: () => {},
+  cycleAudioOutput: async () => {},
   toggleSpeaker: async () => {},
+  toggleCamera: async () => {},
+  switchCamera: async () => {},
+  upgradeToVideo: async () => {},
   isSpeakerOn: false,
+  audioRoute: 'earpiece' as AudioOutputRoute,
   isInCall: false,
   isCallMinimized: false,
   minimizeCall: () => {},
@@ -73,8 +100,6 @@ const CallContext = createContext<CallContextValue>({
 });
 
 export const useCall = () => useContext(CallContext);
-
-// ─── Provider Component ────────────────────────────────────────────────────
 
 interface CallProviderProps {
   children: React.ReactNode;
@@ -87,14 +112,12 @@ export function CallProvider({ children }: CallProviderProps) {
   const [isCallMinimized, setIsCallMinimized] = useState(false);
   const [calleeName, setCalleeName] = useState<string>('');
   const [isSpeakerOn, setIsSpeakerOn] = useState(false);
+  const [audioRoute, setAudioRoute] = useState<AudioOutputRoute>('earpiece');
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const connectedRef = useRef(false);
   const callNotificationIdRef = useRef<string | null>(null);
 
-  // Track previous status for transition detection
   const prevStatusRef = useRef<string>('idle');
-
-  // ── Connect to voice server on mount ─────────────────────────────
 
   const connectVoiceService = useCallback(async () => {
     if (connectedRef.current && voiceCallService.isConnected()) return;
@@ -110,18 +133,12 @@ export function CallProvider({ children }: CallProviderProps) {
   useEffect(() => {
     connectVoiceService();
 
-    return () => {
-      // Don't disconnect on unmount — the service is a singleton
-      // and we want it to stay connected for incoming calls
-    };
+    return () => {};
   }, [connectVoiceService]);
-
-  // ── Listen for app state changes ─────────────────────────────────
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
       if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App came to foreground — reconnect if needed
         if (!voiceCallService.isConnected()) {
           connectedRef.current = false;
           connectVoiceService();
@@ -135,7 +152,15 @@ export function CallProvider({ children }: CallProviderProps) {
     };
   }, [connectVoiceService]);
 
-  // ── Subscribe to call state changes ──────────────────────────────
+  useEffect(() => {
+    const unsubRoute = audioService.onRouteChange((route) => {
+      setAudioRoute(route);
+      setIsSpeakerOn(route === 'speaker');
+    });
+    return () => {
+      unsubRoute();
+    };
+  }, []);
 
   useEffect(() => {
     const unsubState = voiceCallService.onCallStateChange((newState) => {
@@ -144,22 +169,19 @@ export function CallProvider({ children }: CallProviderProps) {
 
       setCallState(newState);
 
-      // ── Audio transitions based on state changes ──────────────
-
-      // Caller starts ringing → play outgoing ring
       if (newState.status === 'ringing' && newState.isCaller && prevStatus !== 'ringing') {
         audioService.startOutgoingRing().catch(console.error);
       }
 
-      // Call becomes active → stop all ring sounds, configure for call
       if (newState.status === 'active' && prevStatus !== 'active') {
         audioService.stopRingtone().catch(console.error);
         audioService.stopOutgoingRing().catch(console.error);
-        audioService.configureForCall().catch(console.error);
-        setIsSpeakerOn(false);
+        audioService.configureForCall(newState.isVideoCall).catch(console.error);
+        const defaultRoute = newState.isVideoCall ? 'speaker' : 'earpiece';
+        setAudioRoute(defaultRoute);
+        setIsSpeakerOn(defaultRoute === 'speaker');
       }
 
-      // Show call screen when in active states (caller side)
       if (
         newState.status === 'connecting' ||
         newState.status === 'ringing' ||
@@ -170,13 +192,11 @@ export function CallProvider({ children }: CallProviderProps) {
         }
       }
 
-      // Call ended/error/rejected → cleanup audio
       if (
         newState.status === 'ended' ||
         newState.status === 'error' ||
         newState.status === 'idle'
       ) {
-        // Dismiss incoming call notification
         if (callNotificationIdRef.current) {
           notificationService
             .dismissCallNotification(callNotificationIdRef.current)
@@ -184,23 +204,20 @@ export function CallProvider({ children }: CallProviderProps) {
           callNotificationIdRef.current = null;
         }
 
-        // Stop any ringing/audio
         audioService.stopRingtone().catch(console.error);
         audioService.stopOutgoingRing().catch(console.error);
 
-        // Play end sound & vibrate
         if (prevStatus === 'active' || prevStatus === 'ringing' || prevStatus === 'connecting') {
           audioService.playCallEndSound().catch(console.error);
           audioService.vibrateShort();
         }
 
-        // Cleanup audio mode after a brief delay
         setTimeout(() => {
           audioService.cleanup().catch(console.error);
           setIsSpeakerOn(false);
+          setAudioRoute('earpiece');
         }, 500);
 
-        // Hide call screen after delay
         setTimeout(() => {
           setShowCallScreen(false);
           setIncomingCall(null);
@@ -208,7 +225,6 @@ export function CallProvider({ children }: CallProviderProps) {
       }
 
       if (newState.status === 'rejected' || newState.status === 'missed') {
-        // Dismiss incoming call notification
         if (callNotificationIdRef.current) {
           notificationService
             .dismissCallNotification(callNotificationIdRef.current)
@@ -216,18 +232,16 @@ export function CallProvider({ children }: CallProviderProps) {
           callNotificationIdRef.current = null;
         }
 
-        // Stop ringing
         audioService.stopRingtone().catch(console.error);
         audioService.stopOutgoingRing().catch(console.error);
         audioService.vibrateShort();
 
-        // Cleanup audio
         setTimeout(() => {
           audioService.cleanup().catch(console.error);
           setIsSpeakerOn(false);
+          setAudioRoute('earpiece');
         }, 500);
 
-        // Hide call screen after showing status
         setTimeout(() => {
           setShowCallScreen(false);
           setIncomingCall(null);
@@ -237,12 +251,14 @@ export function CallProvider({ children }: CallProviderProps) {
 
     const unsubIncoming = voiceCallService.onIncomingCall((data) => {
       setIncomingCall(data);
-      // Start ringtone + vibration for incoming call
+
       audioService.startRingtone().catch(console.error);
 
-      // Show a system notification (useful when app is in background)
+      const displayName = data.isGroup
+        ? `${data.callerName} (${data.groupName || 'Group Call'})`
+        : data.callerName;
       notificationService
-        .notifyIncomingCall(data.callId, data.callerName, data.conversationId ?? undefined)
+        .notifyIncomingCall(data.callId, displayName, data.conversationId ?? undefined)
         .then((nId) => {
           callNotificationIdRef.current = nId;
         })
@@ -255,23 +271,61 @@ export function CallProvider({ children }: CallProviderProps) {
     };
   }, []);
 
-  // ── Call Actions ─────────────────────────────────────────────────
-
   const initiateCall = useCallback(
     async (
       calleeId: number,
       callerName: string,
       calleeDisplayName: string,
-      conversationId?: string
+      conversationId?: string,
+      isVideoCall: boolean = false
     ) => {
       try {
         await connectVoiceService();
         setCalleeName(calleeDisplayName);
         setShowCallScreen(true);
-        await voiceCallService.initiateCall(calleeId, callerName, conversationId);
+        if (isVideoCall) {
+          try {
+            await audioService.setAudioRoute('speaker');
+            setAudioRoute('speaker');
+            setIsSpeakerOn(true);
+          } catch {}
+        }
+        await voiceCallService.initiateCall(calleeId, callerName, conversationId, isVideoCall);
       } catch (error: any) {
         console.error('[CallProvider] initiateCall error:', error);
-        // State is handled inside the service
+      }
+    },
+    [connectVoiceService]
+  );
+
+  const initiateGroupCall = useCallback(
+    async (
+      participantIds: number[],
+      callerName: string,
+      conversationId: string,
+      groupName: string,
+      isVideoCall: boolean = false
+    ) => {
+      try {
+        await connectVoiceService();
+        setCalleeName(groupName);
+        setShowCallScreen(true);
+        if (isVideoCall) {
+          try {
+            await audioService.setAudioRoute('speaker');
+            setAudioRoute('speaker');
+            setIsSpeakerOn(true);
+          } catch {}
+        }
+        await voiceCallService.initiateGroupCall(
+          participantIds,
+          callerName,
+          conversationId,
+          groupName,
+          isVideoCall
+        );
+      } catch (error: any) {
+        console.error('[CallProvider] initiateGroupCall error:', error);
       }
     },
     [connectVoiceService]
@@ -279,9 +333,8 @@ export function CallProvider({ children }: CallProviderProps) {
 
   const acceptCall = useCallback(async () => {
     try {
-      // Stop ringtone immediately on accept
       await audioService.stopRingtone();
-      // Dismiss call notification
+
       if (callNotificationIdRef.current) {
         notificationService.dismissCallNotification(callNotificationIdRef.current).catch(() => {});
         callNotificationIdRef.current = null;
@@ -296,9 +349,8 @@ export function CallProvider({ children }: CallProviderProps) {
 
   const rejectCall = useCallback(async () => {
     try {
-      // Stop ringtone immediately on reject
       await audioService.stopRingtone();
-      // Dismiss call notification
+
       if (callNotificationIdRef.current) {
         notificationService.dismissCallNotification(callNotificationIdRef.current).catch(() => {});
         callNotificationIdRef.current = null;
@@ -322,12 +374,53 @@ export function CallProvider({ children }: CallProviderProps) {
     voiceCallService.toggleMute();
   }, []);
 
+  const cycleAudioOutput = useCallback(async () => {
+    try {
+      const newRoute = await audioService.cycleAudioOutput();
+      setAudioRoute(newRoute);
+      setIsSpeakerOn(newRoute === 'speaker');
+    } catch (error) {
+      console.error('[CallProvider] cycleAudioOutput error:', error);
+    }
+  }, []);
+
   const toggleSpeaker = useCallback(async () => {
     try {
       const newState = await audioService.toggleSpeaker();
       setIsSpeakerOn(newState);
+      setAudioRoute(newState ? 'speaker' : 'earpiece');
     } catch (error) {
       console.error('[CallProvider] toggleSpeaker error:', error);
+    }
+  }, []);
+
+  const toggleCamera = useCallback(async () => {
+    try {
+      await voiceCallService.toggleCamera();
+    } catch (error) {
+      console.error('[CallProvider] toggleCamera error:', error);
+    }
+  }, []);
+
+  const switchCamera = useCallback(async () => {
+    try {
+      await voiceCallService.switchCamera();
+    } catch (error) {
+      console.error('[CallProvider] switchCamera error:', error);
+    }
+  }, []);
+
+  const upgradeToVideo = useCallback(async () => {
+    try {
+      await voiceCallService.upgradeToVideo();
+
+      try {
+        await audioService.setAudioRoute('speaker');
+        setAudioRoute('speaker');
+        setIsSpeakerOn(true);
+      } catch {}
+    } catch (error) {
+      console.error('[CallProvider] upgradeToVideo error:', error);
     }
   }, []);
 
@@ -335,8 +428,6 @@ export function CallProvider({ children }: CallProviderProps) {
     callState.status === 'active' ||
     callState.status === 'ringing' ||
     callState.status === 'connecting';
-
-  // ── Minimize / Restore call ──────────────────────────────────────
 
   const minimizeCall = useCallback(() => {
     setIsCallMinimized(true);
@@ -346,32 +437,34 @@ export function CallProvider({ children }: CallProviderProps) {
     setIsCallMinimized(false);
   }, []);
 
-  // Reset minimized state when call ends
   useEffect(() => {
     if (!isInCall) {
       setIsCallMinimized(false);
     }
   }, [isInCall]);
 
-  // ── Determine display name for remote user ───────────────────────
-
-  const remoteDisplayName =
-    callState.remoteUserName ||
-    (incomingCall ? incomingCall.callerName : null) ||
-    calleeName ||
-    'Unknown';
-
-  // ── Context value ────────────────────────────────────────────────
+  const remoteDisplayName = callState.isGroupCall
+    ? callState.groupName || 'Group Call'
+    : callState.remoteUserName ||
+      (incomingCall ? incomingCall.callerName : null) ||
+      calleeName ||
+      'Unknown';
 
   const contextValue: CallContextValue = {
     callState,
     initiateCall,
+    initiateGroupCall,
     acceptCall,
     rejectCall,
     endCall,
     toggleMute,
+    cycleAudioOutput,
     toggleSpeaker,
+    toggleCamera,
+    switchCamera,
+    upgradeToVideo,
     isSpeakerOn,
+    audioRoute,
     isInCall,
     isCallMinimized,
     minimizeCall,
@@ -387,6 +480,9 @@ export function CallProvider({ children }: CallProviderProps) {
       {incomingCall && callState.status === 'ringing' && !callState.isCaller && (
         <IncomingCallScreen
           callerName={incomingCall.callerName}
+          isGroupCall={!!incomingCall.isGroup}
+          isVideoCall={!!incomingCall.isVideoCall}
+          groupName={incomingCall.groupName || undefined}
           onAccept={acceptCall}
           onReject={rejectCall}
         />
@@ -432,16 +528,18 @@ export function CallProvider({ children }: CallProviderProps) {
           remoteUserName={remoteDisplayName}
           onEndCall={endCall}
           onToggleMute={toggleMute}
-          onToggleSpeaker={toggleSpeaker}
+          onToggleSpeaker={cycleAudioOutput}
+          onToggleCamera={toggleCamera}
+          onSwitchCamera={switchCamera}
+          onUpgradeToVideo={upgradeToVideo}
           onMinimize={minimizeCall}
           isSpeakerOn={isSpeakerOn}
+          audioRoute={audioRoute}
         />
       )}
     </CallContext.Provider>
   );
 }
-
-// ─── Floating Banner Styles ────────────────────────────────────────────────
 
 const floatingStyles = StyleSheet.create({
   banner: {

@@ -6,12 +6,18 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface IncomingCallScreenProps {
   callerName: string;
+  isGroupCall?: boolean;
+  isVideoCall?: boolean;
+  groupName?: string;
   onAccept: () => void;
   onReject: () => void;
 }
 
 export default function IncomingCallScreen({
   callerName,
+  isGroupCall = false,
+  isVideoCall = false,
+  groupName,
   onAccept,
   onReject,
 }: IncomingCallScreenProps) {
@@ -23,7 +29,6 @@ export default function IncomingCallScreen({
   const ringScale2 = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    // Slide up animation
     Animated.spring(slideUpAnim, {
       toValue: 0,
       useNativeDriver: true,
@@ -31,7 +36,6 @@ export default function IncomingCallScreen({
       friction: 9,
     }).start();
 
-    // Pulsing avatar animation
     const pulseLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
@@ -48,7 +52,6 @@ export default function IncomingCallScreen({
     );
     pulseLoop.start();
 
-    // Ring pulse animations
     const ringLoop1 = Animated.loop(
       Animated.parallel([
         Animated.timing(ringScale1, {
@@ -105,7 +108,15 @@ export default function IncomingCallScreen({
 
       {/* Top Section */}
       <View style={styles.topSection}>
-        <Text style={styles.incomingLabel}>Incoming Voice Call</Text>
+        <Text style={styles.incomingLabel}>
+          {isGroupCall
+            ? isVideoCall
+              ? 'Incoming Group Video Call'
+              : 'Incoming Group Call'
+            : isVideoCall
+              ? 'Incoming Video Call'
+              : 'Incoming Voice Call'}
+        </Text>
 
         {/* Avatar with pulse rings */}
         <View style={styles.avatarContainer}>
@@ -136,7 +147,9 @@ export default function IncomingCallScreen({
         </View>
 
         <Text style={styles.callerName}>{callerName}</Text>
-        <Text style={styles.callerSubtext}>Voice Call</Text>
+        <Text style={styles.callerSubtext}>
+          {isGroupCall ? groupName || 'Group Call' : isVideoCall ? 'Video Call' : 'Voice Call'}
+        </Text>
       </View>
 
       {/* Bottom Section - Action Buttons */}
@@ -163,7 +176,7 @@ export default function IncomingCallScreen({
             style={[styles.actionButton, styles.acceptButton]}
             onPress={onAccept}
             activeOpacity={0.7}>
-            <Ionicons name="call" size={32} color="#fff" />
+            <Ionicons name={isVideoCall ? 'videocam' : 'call'} size={32} color="#fff" />
           </TouchableOpacity>
           <Text style={styles.actionLabel}>Accept</Text>
         </View>

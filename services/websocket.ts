@@ -35,7 +35,6 @@ class WebSocketService {
         console.log('WebSocket already connected to this conversation');
         return;
       }
-      // Close existing connection if connecting to different conversation
       this.disconnect();
     }
 
@@ -48,7 +47,6 @@ class WebSocketService {
         throw new Error('No access token available');
       }
 
-      // Get base URL from env and convert to WebSocket URL
       const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000';
       const wsBaseUrl = apiBaseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
       const wsUrl = `${wsBaseUrl}/ws/chat/${conversationId}/?token=${accessToken}`;
@@ -82,7 +80,6 @@ class WebSocketService {
         console.log('WebSocket closed:', event.code, event.reason);
         this.closeHandlers.forEach((handler) => handler());
 
-        // Attempt to reconnect if not intentionally closed
         if (!this.isIntentionallyClosed && this.reconnectAttempts < this.maxReconnectAttempts) {
           this.reconnectAttempts++;
           const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);

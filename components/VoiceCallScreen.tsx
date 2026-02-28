@@ -1,7 +1,26 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useEffect, useRef } from 'react';
-import { Animated, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { formatCallDuration, type CallState } from '../services/voiceCallService';
+import {
+  Animated,
+  Dimensions,
+  FlatList,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { RTCView } from 'react-native-webrtc';
+import {
+  formatCallDuration,
+  type CallState,
+  type GroupParticipant,
+} from '../services/voiceCallService';
+import { type AudioOutputRoute } from '../services/audioService';
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface VoiceCallScreenProps {
   visible: boolean;
@@ -10,8 +29,12 @@ interface VoiceCallScreenProps {
   onEndCall: () => void;
   onToggleMute: () => void;
   onToggleSpeaker: () => void;
+  onToggleCamera: () => void;
+  onSwitchCamera: () => void;
+  onUpgradeToVideo: () => void;
   onMinimize: () => void;
   isSpeakerOn: boolean;
+  audioRoute: AudioOutputRoute;
 }
 
 export default function VoiceCallScreen({
@@ -21,8 +44,12 @@ export default function VoiceCallScreen({
   onEndCall,
   onToggleMute,
   onToggleSpeaker,
+  onToggleCamera,
+  onSwitchCamera,
+  onUpgradeToVideo,
   onMinimize,
   isSpeakerOn,
+  audioRoute,
 }: VoiceCallScreenProps) {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -34,14 +61,12 @@ export default function VoiceCallScreen({
   useEffect(() => {
     if (!visible) return;
 
-    // Fade in
     Animated.timing(fadeAnim, {
       toValue: 1,
       duration: 300,
       useNativeDriver: true,
     }).start();
 
-    // Pulse animation for avatar during ringing/connecting
     let pulseLoop: Animated.CompositeAnimation | null = null;
     if (callState.status === 'ringing' || callState.status === 'connecting') {
       pulseLoop = Animated.loop(
@@ -63,7 +88,6 @@ export default function VoiceCallScreen({
       pulseAnim.setValue(1);
     }
 
-    // Dot animation for "Calling..." or "Connecting..."
     let dotLoop: Animated.CompositeAnimation | null = null;
     if (callState.status === 'ringing' || callState.status === 'connecting') {
       dotLoop = Animated.loop(
@@ -109,7 +133,6 @@ export default function VoiceCallScreen({
       dotLoop.start();
     }
 
-    // Wave animation for active call
     let waveLoop: Animated.CompositeAnimation | null = null;
     if (callState.status === 'active') {
       waveLoop = Animated.loop(
@@ -147,10 +170,11 @@ export default function VoiceCallScreen({
   const getStatusText = (): string => {
     switch (callState.status) {
       case 'connecting':
-        return 'Connecting';
+        return callState.error || 'Connecting';
       case 'ringing':
-        return 'Ringing';
+        return callState.error || 'Ringing';
       case 'active':
+        if (callState.error) return callState.error;
         return formatCallDuration(callState.duration);
       case 'ended':
         return 'Call Ended';
@@ -168,10 +192,10 @@ export default function VoiceCallScreen({
   const getStatusColor = (): string => {
     switch (callState.status) {
       case 'active':
-        return '#4ade80';
+        return callState.error ? '#facc15' : '#4ade80';
       case 'ringing':
       case 'connecting':
-        return '#facc15';
+        return callState.error ? '#fb923c' : '#facc15';
       case 'ended':
         return '#a1a1b5';
       case 'rejected':
@@ -205,6 +229,36 @@ export default function VoiceCallScreen({
         {/* Background */}
         <View style={styles.background} />
 
+        {/* ── Remote Video (full-screen behind everything) ── */}
+        {callState.isVideoCall && callState.remoteVideoStreamURL && callState.isPeerCameraOn && (
+          <RTCView
+            streamURL={callState.remoteVideoStreamURL}
+            style={styles.remoteVideo}
+            objectFit="cover"
+            zOrder={0}
+          />
+        )}
+
+        {/* ── Local Video PIP ── */}
+        {callState.isVideoCall && callState.localVideoStreamURL && callState.isCameraOn && (
+          <View style={styles.localVideoPip}>
+            <RTCView
+              streamURL={callState.localVideoStreamURL}
+              style={styles.localVideoStream}
+              objectFit="cover"
+              mirror={callState.isFrontCamera}
+              zOrder={1}
+            />
+            {/* Switch Camera overlay button */}
+            <TouchableOpacity
+              style={styles.switchCameraButton}
+              onPress={onSwitchCamera}
+              activeOpacity={0.7}>
+              <Ionicons name="camera-reverse-outline" size={18} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Top status bar area */}
         <View style={styles.topBar}>
           {/* Minimize Button */}
@@ -225,89 +279,163 @@ export default function VoiceCallScreen({
 
         {/* Center Section */}
         <View style={styles.centerSection}>
-          {/* Avatar */}
-          <View style={styles.avatarWrapper}>
-            {/* Active call wave indicator */}
-            {isCallActive && (
-              <Animated.View
-                style={[
-                  styles.activeRing,
-                  {
-                    opacity: waveAnim.interpolate({
-                      inputRange: [0, 0.5, 1],
-                      outputRange: [0.15, 0.35, 0.15],
-                    }),
-                    transform: [
-                      {
-                        scale: waveAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [1, 1.25],
-                        }),
-                      },
-                    ],
-                  },
-                ]}
-              />
-            )}
+          {callState.isGroupCall ? (
+            <>
+              {/* Group name */}
+              <Text style={styles.userName}>{remoteUserName}</Text>
 
-            {/* Ringing pulse */}
-            {isCallPending && (
-              <Animated.View
-                style={[
-                  styles.pendingRing,
-                  {
-                    transform: [{ scale: pulseAnim }],
-                  },
-                ]}
-              />
-            )}
+              {/* Status */}
+              <View style={styles.statusContainer}>
+                {isCallPending && (
+                  <View style={styles.dotsContainer}>
+                    <Text style={[styles.statusText, { color: getStatusColor() }]}>
+                      {getStatusText()}
+                    </Text>
+                    <Animated.Text
+                      style={[styles.dot, { color: getStatusColor(), opacity: dotAnim1 }]}>
+                      .
+                    </Animated.Text>
+                    <Animated.Text
+                      style={[styles.dot, { color: getStatusColor(), opacity: dotAnim2 }]}>
+                      .
+                    </Animated.Text>
+                    <Animated.Text
+                      style={[styles.dot, { color: getStatusColor(), opacity: dotAnim3 }]}>
+                      .
+                    </Animated.Text>
+                  </View>
+                )}
+                {!isCallPending && (
+                  <Text style={[styles.statusText, { color: getStatusColor() }]}>
+                    {getStatusText()}
+                  </Text>
+                )}
+              </View>
 
-            <Animated.View
-              style={[
-                styles.avatar,
-                isCallActive && styles.avatarActive,
-                isCallFinished && styles.avatarFinished,
-                { transform: [{ scale: pulseAnim }] },
-              ]}>
-              <Text style={styles.avatarText}>{getInitials(remoteUserName)}</Text>
-            </Animated.View>
-          </View>
-
-          {/* Name */}
-          <Text style={styles.userName}>{remoteUserName}</Text>
-
-          {/* Status */}
-          <View style={styles.statusContainer}>
-            {isCallPending && (
-              <View style={styles.dotsContainer}>
-                <Text style={[styles.statusText, { color: getStatusColor() }]}>
-                  {getStatusText()}
+              {/* Participant count */}
+              {isCallActive && (
+                <Text style={styles.participantCount}>
+                  {callState.participants.filter((p) => p.status === 'active').length + 1}{' '}
+                  participants
                 </Text>
-                <Animated.Text style={[styles.dot, { color: getStatusColor(), opacity: dotAnim1 }]}>
-                  .
-                </Animated.Text>
-                <Animated.Text style={[styles.dot, { color: getStatusColor(), opacity: dotAnim2 }]}>
-                  .
-                </Animated.Text>
-                <Animated.Text style={[styles.dot, { color: getStatusColor(), opacity: dotAnim3 }]}>
-                  .
-                </Animated.Text>
-              </View>
-            )}
+              )}
 
-            {!isCallPending && (
-              <Text style={[styles.statusText, { color: getStatusColor() }]}>
-                {getStatusText()}
-              </Text>
-            )}
-
-            {callState.isPeerMuted && isCallActive && (
-              <View style={styles.peerMutedBadge}>
-                <Ionicons name="mic-off" size={12} color="#fb923c" />
-                <Text style={styles.peerMutedText}>{remoteUserName.split(' ')[0]} is muted</Text>
+              {/* Participants grid */}
+              <ScrollView
+                contentContainerStyle={styles.participantsGrid}
+                showsVerticalScrollIndicator={false}
+                style={styles.participantsScroll}>
+                {callState.participants
+                  .filter((p) => p.status === 'active' || p.status === 'ringing')
+                  .map((participant) => (
+                    <View key={participant.userId} style={styles.participantItem}>
+                      <View
+                        style={[
+                          styles.participantAvatar,
+                          participant.status === 'active'
+                            ? styles.participantAvatarActive
+                            : styles.participantAvatarRinging,
+                        ]}>
+                        <Text style={styles.participantAvatarText}>
+                          {getInitials(participant.userName)}
+                        </Text>
+                        {participant.isMuted && (
+                          <View style={styles.participantMuteIcon}>
+                            <Ionicons name="mic-off" size={10} color="#fb923c" />
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.participantName} numberOfLines={1}>
+                        {participant.userName.split(' ')[0]}
+                      </Text>
+                      {participant.status === 'ringing' && (
+                        <Text style={styles.participantRinging}>Ringing...</Text>
+                      )}
+                    </View>
+                  ))}
+              </ScrollView>
+            </>
+          ) : (
+            <>
+              {/* Avatar */}
+              <View style={styles.avatarWrapper}>
+                {isCallActive && (
+                  <Animated.View
+                    style={[
+                      styles.activeRing,
+                      {
+                        opacity: waveAnim.interpolate({
+                          inputRange: [0, 0.5, 1],
+                          outputRange: [0.15, 0.35, 0.15],
+                        }),
+                        transform: [
+                          {
+                            scale: waveAnim.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [1, 1.25],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                )}
+                {isCallPending && (
+                  <Animated.View
+                    style={[styles.pendingRing, { transform: [{ scale: pulseAnim }] }]}
+                  />
+                )}
+                <Animated.View
+                  style={[
+                    styles.avatar,
+                    isCallActive && styles.avatarActive,
+                    isCallFinished && styles.avatarFinished,
+                    { transform: [{ scale: pulseAnim }] },
+                  ]}>
+                  <Text style={styles.avatarText}>{getInitials(remoteUserName)}</Text>
+                </Animated.View>
               </View>
-            )}
-          </View>
+
+              {/* Name */}
+              <Text style={styles.userName}>{remoteUserName}</Text>
+
+              {/* Status */}
+              <View style={styles.statusContainer}>
+                {isCallPending && (
+                  <View style={styles.dotsContainer}>
+                    <Text style={[styles.statusText, { color: getStatusColor() }]}>
+                      {getStatusText()}
+                    </Text>
+                    <Animated.Text
+                      style={[styles.dot, { color: getStatusColor(), opacity: dotAnim1 }]}>
+                      .
+                    </Animated.Text>
+                    <Animated.Text
+                      style={[styles.dot, { color: getStatusColor(), opacity: dotAnim2 }]}>
+                      .
+                    </Animated.Text>
+                    <Animated.Text
+                      style={[styles.dot, { color: getStatusColor(), opacity: dotAnim3 }]}>
+                      .
+                    </Animated.Text>
+                  </View>
+                )}
+                {!isCallPending && (
+                  <Text style={[styles.statusText, { color: getStatusColor() }]}>
+                    {getStatusText()}
+                  </Text>
+                )}
+                {callState.isPeerMuted && isCallActive && (
+                  <View style={styles.peerMutedBadge}>
+                    <Ionicons name="mic-off" size={12} color="#fb923c" />
+                    <Text style={styles.peerMutedText}>
+                      {remoteUserName.split(' ')[0]} is muted
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </>
+          )}
         </View>
 
         {/* Bottom Controls */}
@@ -332,34 +460,145 @@ export default function VoiceCallScreen({
                 </Text>
               </View>
 
-              {/* Speaker Button */}
-              <View style={styles.controlContainer}>
-                <TouchableOpacity
-                  style={[styles.controlButton, isSpeakerOn && styles.controlButtonSpeakerActive]}
-                  onPress={onToggleSpeaker}
-                  activeOpacity={0.7}>
-                  <MaterialCommunityIcons
-                    name={isSpeakerOn ? 'volume-high' : 'volume-medium'}
-                    size={26}
-                    color={isSpeakerOn ? '#4ade80' : '#fff'}
-                  />
-                </TouchableOpacity>
-                <Text
-                  style={[styles.controlLabel, isSpeakerOn && styles.controlLabelSpeakerActive]}>
-                  {isSpeakerOn ? 'Speaker On' : 'Speaker'}
-                </Text>
-              </View>
+              {/* Camera Toggle - only for video calls */}
+              {callState.isVideoCall && (
+                <View style={styles.controlContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.controlButton,
+                      !callState.isCameraOn && styles.controlButtonActive,
+                    ]}
+                    onPress={onToggleCamera}
+                    activeOpacity={0.7}>
+                    <Ionicons
+                      name={callState.isCameraOn ? 'videocam' : 'videocam-off'}
+                      size={26}
+                      color={!callState.isCameraOn ? '#dc2626' : '#fff'}
+                    />
+                  </TouchableOpacity>
+                  <Text
+                    style={[
+                      styles.controlLabel,
+                      !callState.isCameraOn && styles.controlLabelActive,
+                    ]}>
+                    {callState.isCameraOn ? 'Cam On' : 'Cam Off'}
+                  </Text>
+                </View>
+              )}
 
-              {/* Bluetooth Button */}
-              <View style={styles.controlContainer}>
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={onToggleSpeaker}
-                  activeOpacity={0.7}>
-                  <MaterialCommunityIcons name="bluetooth-audio" size={26} color="#fff" />
-                </TouchableOpacity>
-                <Text style={styles.controlLabel}>Bluetooth</Text>
-              </View>
+              {/* Audio Output Route Button (earpiece / speaker / bluetooth) */}
+              {!callState.isVideoCall && (
+                <View style={styles.controlContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.controlButton,
+                      audioRoute === 'speaker' && styles.controlButtonSpeakerActive,
+                      audioRoute === 'bluetooth' && styles.controlButtonBluetoothActive,
+                    ]}
+                    onPress={onToggleSpeaker}
+                    activeOpacity={0.7}>
+                    <MaterialCommunityIcons
+                      name={
+                        audioRoute === 'bluetooth'
+                          ? 'bluetooth-audio'
+                          : audioRoute === 'speaker'
+                            ? 'volume-high'
+                            : 'phone-in-talk'
+                      }
+                      size={26}
+                      color={
+                        audioRoute === 'bluetooth'
+                          ? '#60a5fa'
+                          : audioRoute === 'speaker'
+                            ? '#4ade80'
+                            : '#fff'
+                      }
+                    />
+                  </TouchableOpacity>
+                  <Text
+                    style={[
+                      styles.controlLabel,
+                      audioRoute === 'speaker' && styles.controlLabelSpeakerActive,
+                      audioRoute === 'bluetooth' && styles.controlLabelBluetoothActive,
+                    ]}>
+                    {audioRoute === 'bluetooth'
+                      ? 'Bluetooth'
+                      : audioRoute === 'speaker'
+                        ? 'Speaker'
+                        : 'Earpiece'}
+                  </Text>
+                </View>
+              )}
+
+              {/* Upgrade to Video - ONLY for 1:1 voice calls (not group) */}
+              {!callState.isVideoCall && !callState.isGroupCall && isCallActive && (
+                <View style={styles.controlContainer}>
+                  <TouchableOpacity
+                    style={[styles.controlButton, styles.controlButtonUpgrade]}
+                    onPress={onUpgradeToVideo}
+                    activeOpacity={0.7}>
+                    <Ionicons name="videocam" size={26} color="#60a5fa" />
+                  </TouchableOpacity>
+                  <Text style={[styles.controlLabel, { color: '#60a5fa' }]}>Video</Text>
+                </View>
+              )}
+
+              {/* Camera Switch - for video calls */}
+              {callState.isVideoCall && (
+                <View style={styles.controlContainer}>
+                  <TouchableOpacity
+                    style={styles.controlButton}
+                    onPress={onSwitchCamera}
+                    activeOpacity={0.7}>
+                    <Ionicons name="camera-reverse" size={26} color="#fff" />
+                  </TouchableOpacity>
+                  <Text style={styles.controlLabel}>Flip</Text>
+                </View>
+              )}
+
+              {/* Audio Output Route Button for video calls */}
+              {callState.isVideoCall && (
+                <View style={styles.controlContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.controlButton,
+                      audioRoute === 'speaker' && styles.controlButtonSpeakerActive,
+                      audioRoute === 'bluetooth' && styles.controlButtonBluetoothActive,
+                    ]}
+                    onPress={onToggleSpeaker}
+                    activeOpacity={0.7}>
+                    <MaterialCommunityIcons
+                      name={
+                        audioRoute === 'bluetooth'
+                          ? 'bluetooth-audio'
+                          : audioRoute === 'speaker'
+                            ? 'volume-high'
+                            : 'phone-in-talk'
+                      }
+                      size={26}
+                      color={
+                        audioRoute === 'bluetooth'
+                          ? '#60a5fa'
+                          : audioRoute === 'speaker'
+                            ? '#4ade80'
+                            : '#fff'
+                      }
+                    />
+                  </TouchableOpacity>
+                  <Text
+                    style={[
+                      styles.controlLabel,
+                      audioRoute === 'speaker' && styles.controlLabelSpeakerActive,
+                      audioRoute === 'bluetooth' && styles.controlLabelBluetoothActive,
+                    ]}>
+                    {audioRoute === 'bluetooth'
+                      ? 'Bluetooth'
+                      : audioRoute === 'speaker'
+                        ? 'Speaker'
+                        : 'Earpiece'}
+                  </Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -573,6 +812,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(74, 222, 128, 0.4)',
   },
+  controlButtonBluetoothActive: {
+    backgroundColor: 'rgba(96, 165, 250, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(96, 165, 250, 0.4)',
+  },
   controlLabel: {
     fontSize: 12,
     color: '#a1a1b5',
@@ -584,6 +828,9 @@ const styles = StyleSheet.create({
   },
   controlLabelSpeakerActive: {
     color: '#4ade80',
+  },
+  controlLabelBluetoothActive: {
+    color: '#60a5fa',
   },
   endCallContainer: {
     alignItems: 'center',
@@ -615,5 +862,118 @@ const styles = StyleSheet.create({
   finishedText: {
     fontSize: 14,
     fontWeight: '500',
+  },
+
+  participantCount: {
+    fontSize: 13,
+    color: '#a1a1b5',
+    fontWeight: '500',
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  participantsScroll: {
+    maxHeight: 240,
+    width: '100%',
+  },
+  participantsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 20,
+  },
+  participantItem: {
+    alignItems: 'center',
+    width: 72,
+  },
+  participantAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  participantAvatarActive: {
+    backgroundColor: '#1d4ed8',
+    borderWidth: 2,
+    borderColor: '#4ade80',
+  },
+  participantAvatarRinging: {
+    backgroundColor: '#374151',
+    borderWidth: 2,
+    borderColor: '#facc15',
+    opacity: 0.7,
+  },
+  participantAvatarText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  participantMuteIcon: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  participantName: {
+    fontSize: 12,
+    color: '#d1d5db',
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  participantRinging: {
+    fontSize: 10,
+    color: '#facc15',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+
+  remoteVideo: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    backgroundColor: '#000',
+  },
+  localVideoPip: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 60 : 44,
+    right: 16,
+    width: 120,
+    height: 170,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#1a1a2e',
+    zIndex: 20,
+    elevation: 20,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  localVideoStream: {
+    width: '100%',
+    height: '100%',
+  },
+  switchCameraButton: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  controlButtonUpgrade: {
+    backgroundColor: 'rgba(96, 165, 250, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(96, 165, 250, 0.4)',
   },
 });

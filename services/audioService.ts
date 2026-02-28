@@ -1,17 +1,24 @@
 import { Audio, AVPlaybackStatus } from 'expo-av';
-import { Platform, Vibration } from 'react-native';
+import InCallManager from 'react-native-incall-manager';
+import { NativeModules, NativeEventEmitter, Platform, Vibration } from 'react-native';
 import { CALL_END, OUTGOING_RING, RINGTONE } from '../assets/sounds';
 
-// ─── Vibration Patterns ────────────────────────────────────────────────────
+const RNInCallManager = NativeModules.InCallManager;
+const InCallManagerEmitter = RNInCallManager ? new NativeEventEmitter(RNInCallManager) : null;
 
-// Ringtone vibration: vibrate 1s, pause 1s, repeat
 const RING_VIBRATION_PATTERN =
   Platform.OS === 'android' ? [0, 1000, 1000, 1000, 1000, 1000] : [0, 1000, 1000, 1000, 1000, 1000];
 
-// Single short vibration for call events
 const SHORT_VIBRATION = 200;
+const BT_DETECTION_DELAY_MS = 2000;
 
-// ─── Audio Service ─────────────────────────────────────────────────────────
+export type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
+export type AudioRouteListener = (route: AudioOutputRoute) => void;
+
+interface AudioDeviceStatus {
+  availableAudioDeviceList: string;
+  selectedAudioDevice: string;
+}
 
 class AudioService {
   private ringtoneSound: Audio.Sound | null = null;
@@ -20,36 +27,349 @@ class AudioService {
   private isRingtonePlaying = false;
   private isOutgoingRingPlaying = false;
   private isVibrating = false;
-  private isSpeakerOn = false;
   private audioModeConfigured = false;
+  private currentRoute: AudioOutputRoute = 'earpiece';
+  private bluetoothAvailable = false;
+  private routeListeners: Set<AudioRouteListener> = new Set();
+  private inCallManagerStarted = false;
+  private btDetectionTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // ── Audio Mode Configuration ─────────────────────────────────────
+  /* ===================================================================
+   * CONSTRUCTOR
+   *
+   * Sets up a persistent NativeEventEmitter listener for audio device
+   * changes. This listener is registered ONCE and never removed,
+   * because the native InCallManager module does not implement
+   * addListener/removeListeners — re-subscribing after removal
+   * breaks event delivery on subsequent calls.
+   * =================================================================== */
 
-  /**
-   * Configure audio session for voice calls.
-   * Call this when a call becomes active.
-   */
-  async configureForCall(): Promise<void> {
+  constructor() {
+    this.setupPersistentEventListener();
+  }
+
+  private setupPersistentEventListener(): void {
+    if (!InCallManagerEmitter) return;
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: true, // Start with earpiece (phone-to-ear)
+      InCallManagerEmitter.addListener('onAudioDeviceChanged', (data: AudioDeviceStatus) => {
+        if (this.inCallManagerStarted) {
+          this.handleAudioDeviceChanged(data);
+        }
       });
-      this.isSpeakerOn = false;
+    } catch (_e) {}
+  }
+
+  /* ===================================================================
+   * START / STOP INCALL MANAGER
+   *
+   * Initializes native audio session management via InCallManager.
+   * Uses auto:true so the native layer automatically manages audio
+   * device detection, Bluetooth SCO connections, and device switching.
+   * User route selections via chooseAudioRoute() still take priority
+   * over auto-routing because the native layer checks
+   * userSelectedAudioDevice first.
+   *
+   * A delayed BT detection refresh runs 2 seconds after start because
+   * the native BluetoothProfile proxy connection is asynchronous —
+   * Bluetooth may not be detected in the initial query.
+   * =================================================================== */
+
+  async startInCallManager(media: 'audio' | 'video' = 'audio'): Promise<void> {
+    if (this.inCallManagerStarted) return;
+    try {
+      InCallManager.start({ media, auto: true, ringback: '' });
+      this.inCallManagerStarted = true;
+      await this.refreshAvailableDevices();
+      this.scheduleDelayedBtDetection();
+    } catch (e) {
+      console.error('[AudioService] InCallManager start failed:', e);
+    }
+  }
+
+  stopInCallManager(): void {
+    if (!this.inCallManagerStarted) return;
+    try {
+      this.cancelDelayedBtDetection();
+      InCallManager.stop({ busytone: '' });
+      this.inCallManagerStarted = false;
+    } catch (e) {
+      console.error('[AudioService] InCallManager stop failed:', e);
+    }
+  }
+
+  /* ===================================================================
+   * DELAYED BLUETOOTH DETECTION
+   *
+   * The native BluetoothProfile proxy setup is asynchronous. After
+   * InCallManager.start(), the Bluetooth manager posts start() to
+   * the UI thread, which then calls getBluetoothProfileProxy() whose
+   * callback onServiceConnected fires later. The initial
+   * refreshAvailableDevices() often misses Bluetooth because the
+   * profile hasn't connected yet. This schedules a second detection
+   * attempt after a delay.
+   * =================================================================== */
+
+  private scheduleDelayedBtDetection(): void {
+    this.cancelDelayedBtDetection();
+    this.btDetectionTimer = setTimeout(async () => {
+      if (this.inCallManagerStarted) {
+        await this.refreshAvailableDevices();
+        this.notifyRouteListeners();
+      }
+    }, BT_DETECTION_DELAY_MS);
+  }
+
+  private cancelDelayedBtDetection(): void {
+    if (this.btDetectionTimer) {
+      clearTimeout(this.btDetectionTimer);
+      this.btDetectionTimer = null;
+    }
+  }
+
+  /* ===================================================================
+   * HANDLE AUDIO DEVICE CHANGE
+   *
+   * Called when the native layer reports a change in available audio
+   * devices. Parses the JSON device list and updates bluetoothAvailable.
+   * If bluetooth was the active route but just disconnected, falls back
+   * to earpiece automatically. Notifies UI listeners when bluetooth
+   * availability changes so the toggle button updates.
+   * =================================================================== */
+
+  private handleAudioDeviceChanged(data: AudioDeviceStatus): void {
+    try {
+      const devices: string[] = JSON.parse(data.availableAudioDeviceList || '[]');
+      const wasBtAvailable = this.bluetoothAvailable;
+      this.bluetoothAvailable = devices.some((d) => d === 'BLUETOOTH');
+
+      if (data.selectedAudioDevice) {
+        const selected = data.selectedAudioDevice;
+        if (selected === 'BLUETOOTH') {
+          this.currentRoute = 'bluetooth';
+        } else if (selected === 'SPEAKER_PHONE') {
+          this.currentRoute = 'speaker';
+        } else if (selected === 'EARPIECE') {
+          this.currentRoute = 'earpiece';
+        }
+      }
+
+      if (wasBtAvailable && !this.bluetoothAvailable && this.currentRoute === 'bluetooth') {
+        this.setAudioRoute('earpiece');
+        return;
+      }
+
+      this.notifyRouteListeners();
+    } catch (_e) {}
+  }
+
+  /* ===================================================================
+   * REFRESH AVAILABLE AUDIO DEVICES
+   *
+   * Actively queries the native layer for the current set of available
+   * audio devices by calling chooseAudioRoute with the current route.
+   * The return value includes availableAudioDeviceList which we parse
+   * to update the bluetoothAvailable flag. Called once when InCallManager
+   * starts and each time the user cycles the audio output.
+   * =================================================================== */
+
+  private async refreshAvailableDevices(): Promise<void> {
+    if (!this.inCallManagerStarted) {
+      this.bluetoothAvailable = false;
+      return;
+    }
+
+    try {
+      const routeMap: Record<AudioOutputRoute, string> = {
+        earpiece: 'EARPIECE',
+        speaker: 'SPEAKER_PHONE',
+        bluetooth: 'BLUETOOTH',
+      };
+      const result: AudioDeviceStatus = await InCallManager.chooseAudioRoute(
+        routeMap[this.currentRoute]
+      );
+      if (result && result.availableAudioDeviceList) {
+        const devices: string[] = JSON.parse(result.availableAudioDeviceList);
+        this.bluetoothAvailable = devices.some((d) => d === 'BLUETOOTH');
+      }
+    } catch (_e) {
+      this.bluetoothAvailable = false;
+    }
+  }
+
+  /* ===================================================================
+   * SET AUDIO ROUTE
+   *
+   * Switches audio output to the specified route using InCallManager's
+   * chooseAudioRoute() which accepts:
+   *   "EARPIECE" | "SPEAKER_PHONE" | "BLUETOOTH" | "WIRED_HEADSET"
+   * The native module handles Bluetooth SCO, speaker, and earpiece
+   * switching internally including starting/stopping SCO audio.
+   *
+   * IMPORTANT: Does NOT call expo-av Audio.setAudioModeAsync() when
+   * InCallManager is active — expo-av's setSpeakerphoneOn and setMode
+   * calls conflict with InCallManager's native AudioManager control,
+   * breaking Bluetooth SCO audio routing.
+   * =================================================================== */
+
+  async setAudioRoute(route: AudioOutputRoute): Promise<void> {
+    try {
+      if (this.inCallManagerStarted) {
+        const routeMap: Record<AudioOutputRoute, string> = {
+          earpiece: 'EARPIECE',
+          speaker: 'SPEAKER_PHONE',
+          bluetooth: 'BLUETOOTH',
+        };
+
+        const result: AudioDeviceStatus = await InCallManager.chooseAudioRoute(routeMap[route]);
+
+        if (result && result.availableAudioDeviceList) {
+          const devices: string[] = JSON.parse(result.availableAudioDeviceList);
+          this.bluetoothAvailable = devices.some((d) => d === 'BLUETOOTH');
+        }
+
+        if (result && result.selectedAudioDevice) {
+          const selected = result.selectedAudioDevice;
+          if (selected === 'BLUETOOTH') {
+            this.currentRoute = 'bluetooth';
+          } else if (selected === 'SPEAKER_PHONE') {
+            this.currentRoute = 'speaker';
+          } else {
+            this.currentRoute = 'earpiece';
+          }
+        } else {
+          this.currentRoute = route;
+        }
+      } else {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: route === 'earpiece',
+        });
+        this.currentRoute = route;
+      }
+
+      this.notifyRouteListeners();
+    } catch (error) {
+      console.error('[AudioService] Failed to set audio route:', error);
+    }
+  }
+
+  /* ===================================================================
+   * CYCLE AUDIO OUTPUT  (3-way toggle button)
+   *
+   * Cycles through available audio output routes in this order:
+   *   earpiece -> speaker -> bluetooth -> earpiece -> ...
+   * If no bluetooth device is connected, bluetooth is skipped:
+   *   earpiece -> speaker -> earpiece -> ...
+   * Re-checks available devices each time it is called so newly
+   * connected bluetooth devices are detected immediately.
+   * Returns the new active route.
+   * =================================================================== */
+
+  async cycleAudioOutput(): Promise<AudioOutputRoute> {
+    await this.refreshAvailableDevices();
+
+    let nextRoute: AudioOutputRoute;
+
+    if (this.bluetoothAvailable) {
+      switch (this.currentRoute) {
+        case 'earpiece':
+          nextRoute = 'speaker';
+          break;
+        case 'speaker':
+          nextRoute = 'bluetooth';
+          break;
+        case 'bluetooth':
+          nextRoute = 'earpiece';
+          break;
+        default:
+          nextRoute = 'earpiece';
+      }
+    } else {
+      switch (this.currentRoute) {
+        case 'earpiece':
+          nextRoute = 'speaker';
+          break;
+        case 'speaker':
+          nextRoute = 'earpiece';
+          break;
+        case 'bluetooth':
+          nextRoute = 'earpiece';
+          break;
+        default:
+          nextRoute = 'earpiece';
+      }
+    }
+
+    await this.setAudioRoute(nextRoute);
+    return nextRoute;
+  }
+
+  getCurrentRoute(): AudioOutputRoute {
+    return this.currentRoute;
+  }
+
+  isBluetoothAvailable(): boolean {
+    return this.bluetoothAvailable;
+  }
+
+  onRouteChange(listener: AudioRouteListener): () => void {
+    this.routeListeners.add(listener);
+    return () => {
+      this.routeListeners.delete(listener);
+    };
+  }
+
+  private notifyRouteListeners(): void {
+    for (const listener of this.routeListeners) {
+      try {
+        listener(this.currentRoute);
+      } catch (_e) {}
+    }
+  }
+
+  getSpeakerState(): boolean {
+    return this.currentRoute === 'speaker';
+  }
+
+  /* ===================================================================
+   * CONFIGURE AUDIO FOR ACTIVE CALL
+   *
+   * Starts InCallManager which takes full control of native audio:
+   *   - Sets AudioManager mode to MODE_IN_COMMUNICATION
+   *   - Manages Bluetooth SCO connections automatically
+   *   - Monitors audio device connect/disconnect events
+   *
+   * CRITICAL: Does NOT call expo-av Audio.setAudioModeAsync() after
+   * starting InCallManager. expo-av calls audioManager.setSpeakerphoneOn()
+   * and audioManager.setMode() which OVERRIDE InCallManager's native
+   * audio configuration, breaking Bluetooth SCO audio routing.
+   * The initial audio route is set via chooseAudioRoute() which works
+   * within InCallManager's managed audio session.
+   * =================================================================== */
+
+  async configureForCall(isVideoCall: boolean = false): Promise<void> {
+    try {
+      await this.startInCallManager(isVideoCall ? 'video' : 'audio');
+
+      const defaultRoute: AudioOutputRoute = isVideoCall ? 'speaker' : 'earpiece';
+      await this.setAudioRoute(defaultRoute);
       this.audioModeConfigured = true;
-      console.log('[AudioService] Audio mode configured for call (earpiece)');
     } catch (error) {
       console.error('[AudioService] Failed to configure audio mode:', error);
     }
   }
 
-  /**
-   * Configure audio session for ringtone playback.
-   * Plays through speaker at full volume.
-   */
+  /* ===================================================================
+   * CONFIGURE AUDIO FOR RINGTONE
+   *
+   * Routes audio through the loudspeaker so the incoming-call ringtone
+   * is clearly audible even when the phone is on a table.
+   * This uses expo-av since InCallManager is NOT active during ringing.
+   * =================================================================== */
+
   async configureForRingtone(): Promise<void> {
     try {
       await Audio.setAudioModeAsync({
@@ -57,19 +377,27 @@ class AudioService {
         playsInSilentModeIOS: true,
         staysActiveInBackground: true,
         shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false, // Play ringtone through speaker
+        playThroughEarpieceAndroid: false,
       });
-      console.log('[AudioService] Audio mode configured for ringtone (speaker)');
     } catch (error) {
       console.error('[AudioService] Failed to configure ringtone audio mode:', error);
     }
   }
 
-  /**
-   * Reset audio mode to default after call ends.
-   */
+  /* ===================================================================
+   * RESET AUDIO MODE
+   *
+   * Restores audio to the default system configuration after a call
+   * ends. Stops InCallManager (which tears down Bluetooth SCO and
+   * releases audio focus), resets expo-av, and clears route state.
+   * The persistent NativeEventEmitter listener is kept alive so it
+   * works correctly for the next call without re-subscribing.
+   * =================================================================== */
+
   async resetAudioMode(): Promise<void> {
     try {
+      this.stopInCallManager();
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: false,
@@ -77,126 +405,69 @@ class AudioService {
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
       });
-      this.isSpeakerOn = false;
+
+      this.currentRoute = 'earpiece';
+      this.bluetoothAvailable = false;
       this.audioModeConfigured = false;
-      console.log('[AudioService] Audio mode reset to default');
+      this.notifyRouteListeners();
     } catch (error) {
       console.error('[AudioService] Failed to reset audio mode:', error);
     }
   }
 
-  // ── Speaker Toggle ───────────────────────────────────────────────
-
-  /**
-   * Toggle between speaker and earpiece during an active call.
-   * Returns the new speaker state.
-   */
   async toggleSpeaker(): Promise<boolean> {
-    const newSpeakerState = !this.isSpeakerOn;
-
-    try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: !newSpeakerState, // true = earpiece, false = speaker
-      });
-
-      this.isSpeakerOn = newSpeakerState;
-      console.log(`[AudioService] Speaker ${newSpeakerState ? 'ON' : 'OFF'}`);
-    } catch (error) {
-      console.error('[AudioService] Failed to toggle speaker:', error);
+    if (this.currentRoute === 'speaker') {
+      await this.setAudioRoute('earpiece');
+      return false;
+    } else {
+      await this.setAudioRoute('speaker');
+      return true;
     }
-
-    return this.isSpeakerOn;
   }
 
-  /**
-   * Set speaker state explicitly.
-   */
   async setSpeaker(enabled: boolean): Promise<void> {
-    if (this.isSpeakerOn === enabled) return;
-
-    try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: !enabled,
-      });
-
-      this.isSpeakerOn = enabled;
-      console.log(`[AudioService] Speaker set to ${enabled ? 'ON' : 'OFF'}`);
-    } catch (error) {
-      console.error('[AudioService] Failed to set speaker:', error);
-    }
+    await this.setAudioRoute(enabled ? 'speaker' : 'earpiece');
   }
 
-  getSpeakerState(): boolean {
-    return this.isSpeakerOn;
-  }
+  /* ===================================================================
+   * START / STOP RINGTONE
+   *
+   * Plays the bundled incoming-call ringtone in a loop with vibration.
+   * Configures audio for speaker output first so it is heard aloud.
+   * =================================================================== */
 
-  // ── Ringtone (Incoming Call) ─────────────────────────────────────
-
-  /**
-   * Start playing the ringtone for an incoming call.
-   * Uses vibration + optional bundled sound file.
-   */
   async startRingtone(): Promise<void> {
-    if (this.isRingtonePlaying) {
-      console.log('[AudioService] Ringtone already playing');
-      return;
-    }
-
+    if (this.isRingtonePlaying) return;
     this.isRingtonePlaying = true;
-    console.log('[AudioService] Starting ringtone');
 
-    // Configure audio for ringtone (speaker mode)
     await this.configureForRingtone();
-
-    // Start vibration pattern (repeating)
     this.startVibration();
 
-    // Try to play sound if an asset is provided
     if (RINGTONE != null) {
       await this.loadAndPlaySound('ringtone', RINGTONE, true, 1.0);
-    } else {
-      console.log(
-        '[AudioService] No ringtone sound file configured — vibration only.\n' +
-          '  To add a ringtone: place an MP3 in assets/sounds/ringtone.mp3\n' +
-          '  and uncomment the export in assets/sounds/index.ts'
-      );
     }
   }
 
-  /**
-   * Stop the ringtone.
-   */
   async stopRingtone(): Promise<void> {
     if (!this.isRingtonePlaying) return;
-
-    console.log('[AudioService] Stopping ringtone');
     this.isRingtonePlaying = false;
-
     this.stopVibration();
     await this.unloadSound('ringtone');
   }
 
-  // ── Outgoing Ring (Caller Waiting) ───────────────────────────────
+  /* ===================================================================
+   * OUTGOING RING (dial tone)
+   *
+   * Plays a subtle looping dial tone for the caller while waiting
+   * for the other party to answer.
+   * =================================================================== */
 
-  /**
-   * Play a subtle outgoing ring/dial tone for the caller while waiting.
-   */
   async startOutgoingRing(): Promise<void> {
     if (this.isOutgoingRingPlaying) return;
     this.isOutgoingRingPlaying = true;
 
     if (OUTGOING_RING != null) {
       await this.loadAndPlaySound('outgoingRing', OUTGOING_RING, true, 0.5);
-    } else {
-      console.log('[AudioService] No outgoing ring file — caller waits silently');
     }
   }
 
@@ -206,61 +477,50 @@ class AudioService {
     await this.unloadSound('outgoingRing');
   }
 
-  // ── Call End Sound ───────────────────────────────────────────────
+  /* ===================================================================
+   * CALL-END SOUND
+   *
+   * Plays a short beep/tone when a call ends. The sound resource is
+   * automatically unloaded after 3 seconds.
+   * =================================================================== */
 
-  /**
-   * Play a short "call ended" sound.
-   */
   async playCallEndSound(): Promise<void> {
     if (CALL_END != null) {
       await this.loadAndPlaySound('callEnd', CALL_END, false, 0.7);
-      // Auto-cleanup after playback finishes (non-looping)
       setTimeout(() => this.unloadSound('callEnd'), 3000);
     }
   }
 
-  // ── Vibration ────────────────────────────────────────────────────
-
   private startVibration(): void {
     if (this.isVibrating) return;
     this.isVibrating = true;
-
     try {
       Vibration.vibrate(RING_VIBRATION_PATTERN, true);
-      console.log('[AudioService] Vibration started');
-    } catch (error) {
-      console.error('[AudioService] Vibration error:', error);
-    }
+    } catch (_e) {}
   }
 
   private stopVibration(): void {
     if (!this.isVibrating) return;
     this.isVibrating = false;
-
     try {
       Vibration.cancel();
-      console.log('[AudioService] Vibration stopped');
-    } catch (error) {
-      console.error('[AudioService] Error stopping vibration:', error);
-    }
+    } catch (_e) {}
   }
 
-  /**
-   * Single short vibration for events (call ended, rejected, etc.)
-   */
   vibrateShort(): void {
     try {
       Vibration.vibrate(SHORT_VIBRATION);
-    } catch (_e) {
-      /* ignore */
-    }
+    } catch (_e) {}
   }
 
-  // ── Sound Helpers ────────────────────────────────────────────────
+  /* ===================================================================
+   * LOAD AND PLAY SOUND
+   *
+   * Generic helper that loads a bundled audio asset into one of the
+   * named slots (ringtone, outgoingRing, callEnd) and starts playback.
+   * Supports looping and per-slot volume control.
+   * =================================================================== */
 
-  /**
-   * Unified sound loader. Loads a module asset and plays it.
-   */
   private async loadAndPlaySound(
     slot: 'ringtone' | 'outgoingRing' | 'callEnd',
     asset: number,
@@ -268,7 +528,6 @@ class AudioService {
     volume: number
   ): Promise<void> {
     try {
-      // Unload existing sound in this slot first
       await this.unloadSound(slot);
 
       const { sound } = await Audio.Sound.createAsync(asset, {
@@ -277,7 +536,6 @@ class AudioService {
         shouldPlay: true,
       });
 
-      // Store reference by slot
       if (slot === 'ringtone') {
         this.ringtoneSound = sound;
       } else if (slot === 'outgoingRing') {
@@ -286,7 +544,6 @@ class AudioService {
         this.callEndSound = sound;
       }
 
-      // Safety: if looping and playback finishes unexpectedly, restart
       if (isLooping) {
         sound.setOnPlaybackStatusUpdate((status: AVPlaybackStatus) => {
           if (status.isLoaded && status.didJustFinish && !status.isLooping) {
@@ -294,16 +551,18 @@ class AudioService {
           }
         });
       }
-
-      console.log(`[AudioService] Sound "${slot}" loaded and playing (loop=${isLooping})`);
     } catch (error) {
       console.warn(`[AudioService] Could not play sound "${slot}":`, error);
     }
   }
 
-  /**
-   * Unload a sound by slot name.
-   */
+  /* ===================================================================
+   * UNLOAD SOUND
+   *
+   * Stops and unloads a previously loaded sound from the given slot.
+   * Safely handles already-unloaded or never-loaded slots.
+   * =================================================================== */
+
   private async unloadSound(slot: 'ringtone' | 'outgoingRing' | 'callEnd'): Promise<void> {
     let sound: Audio.Sound | null = null;
 
@@ -325,25 +584,23 @@ class AudioService {
           await sound.stopAsync();
           await sound.unloadAsync();
         }
-      } catch (_e) {
-        // Already unloaded or disposed
-      }
+      } catch (_e) {}
     }
   }
 
-  // ── Full Cleanup ─────────────────────────────────────────────────
+  /* ===================================================================
+   * FULL CLEANUP
+   *
+   * Stops every active sound, cancels vibration, and resets all audio
+   * routing back to system defaults. Called when a call fully ends.
+   * =================================================================== */
 
-  /**
-   * Stop everything and reset. Called when a call fully ends.
-   */
   async cleanup(): Promise<void> {
     await this.stopRingtone();
     await this.stopOutgoingRing();
     await this.unloadSound('callEnd');
     await this.resetAudioMode();
-    console.log('[AudioService] Full cleanup done');
   }
 }
 
-// Singleton export
 export const audioService = new AudioService();

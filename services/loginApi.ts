@@ -6,7 +6,6 @@ const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
 const USER_ID_KEY = 'user_id';
 
-// Store tokens
 export const storeTokens = async (accessToken: string, refreshToken: string) => {
   try {
     if (!accessToken || !refreshToken) {
@@ -225,7 +224,6 @@ export const loginApi = async (credentials: LoginRequest): Promise<LoginResponse
       if (accessToken && refreshToken) {
         await storeTokens(accessToken, refreshToken);
 
-        // Extract user ID from access token
         try {
           const base64Url = accessToken.split('.')[1];
           const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
@@ -289,7 +287,6 @@ const refreshAccessToken = async (): Promise<boolean> => {
       return false;
     }
 
-    // Extract new tokens from cookies
     const setCookieHeader = response.headers.get('set-cookie');
     if (setCookieHeader) {
       const cookies = setCookieHeader.split(',');
@@ -329,7 +326,6 @@ export const authenticatedFetch = async (url: string, options: RequestInit = {})
       headers,
     });
 
-    // If we get 401 and haven't retried yet, attempt token refresh
     if (response.status === 401 && !isRetry) {
       console.log('[Auth] Received 401, attempting token refresh');
 
@@ -337,7 +333,7 @@ export const authenticatedFetch = async (url: string, options: RequestInit = {})
 
       if (refreshSuccess) {
         console.log('[Auth] Token refresh successful, retrying request');
-        return makeRequest(true); // Retry with new tokens
+        return makeRequest(true);
       } else {
         console.log('[Auth] Token refresh failed, clearing tokens');
         await clearTokens();
@@ -358,7 +354,6 @@ export const logoutApi = async (): Promise<void> => {
   try {
     console.log('[Auth] Logging out user');
 
-    // Try to call logout endpoint to blacklist token on server
     try {
       const refreshToken = await getRefreshToken();
       if (refreshToken) {
@@ -381,23 +376,20 @@ export const logoutApi = async (): Promise<void> => {
       console.warn('[Auth] Continuing with local cleanup');
     }
 
-    // Clear all local storage and cache
     await clearTokens();
 
-    // Clear all AsyncStorage cache
     try {
       console.log('[Auth] Clearing all cached data');
       await AsyncStorage.clear();
       console.log('[Auth] All cached data cleared successfully');
     } catch (cacheError) {
       console.warn('[Auth] Error clearing cache:', cacheError);
-      // Continue even if cache clearing fails
     }
 
     console.log('[Auth] Local tokens and cache cleared successfully');
   } catch (error) {
     console.error('[Auth] Error during logout:', error);
-    // Always clear tokens and cache even if logout request fails
+
     try {
       await clearTokens();
       await AsyncStorage.clear();

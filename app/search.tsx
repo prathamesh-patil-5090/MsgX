@@ -19,12 +19,10 @@ export default function SearchPage() {
   const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
-    // Auto-focus the search input when the page loads
     setTimeout(() => {
       inputRef.current?.focus();
     }, 100);
 
-    // Cleanup debounce timer on unmount
     return () => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
@@ -35,7 +33,6 @@ export default function SearchPage() {
   const handleSearch = (query: string) => {
     setSearchQuery(query);
 
-    // If query is empty, cancel pending search and clear results
     if (query.trim().length === 0) {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
@@ -45,7 +42,6 @@ export default function SearchPage() {
       return;
     }
 
-    // Debounce search to avoid firing on every keystroke
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
@@ -198,7 +194,6 @@ export default function SearchPage() {
       {/* Search Results */}
       <View className="flex-1">
         {!hasSearched ? (
-          // Initial state - show search prompt
           <View className="flex-1 items-center justify-center px-8">
             <Ionicons name="search-outline" size={64} color="#666" />
             <Text className="mt-4 text-center text-lg text-gray-400">
@@ -209,12 +204,10 @@ export default function SearchPage() {
             </Text>
           </View>
         ) : isSearching ? (
-          // Loading state
           <View className="flex-1 items-center justify-center">
             <Text className="text-gray-400">Searching...</Text>
           </View>
         ) : hasResults ? (
-          // Results list
           <SectionList
             sections={sections}
             keyExtractor={(item: CachedConversation | CachedMessage, index) =>
@@ -236,7 +229,6 @@ export default function SearchPage() {
             keyboardShouldPersistTaps="handled"
           />
         ) : (
-          // No results state
           <View className="flex-1 items-center justify-center px-8">
             <Ionicons name="search-outline" size={64} color="#666" />
             <Text className="mt-4 text-center text-lg text-gray-400">No results found</Text>

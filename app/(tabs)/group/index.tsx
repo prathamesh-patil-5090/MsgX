@@ -27,7 +27,6 @@ import {
 } from 'services/conversationsWebSocket';
 import '../../../global.css';
 
-// Helper function to format timestamp
 const formatMessageTime = (timestamp: string): string => {
   const date = new Date(timestamp);
   const now = new Date();
@@ -35,7 +34,6 @@ const formatMessageTime = (timestamp: string): string => {
   const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
 
   if (diffInDays === 0) {
-    // Today - show time
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
@@ -44,10 +42,8 @@ const formatMessageTime = (timestamp: string): string => {
   } else if (diffInDays === 1) {
     return 'Yesterday';
   } else if (diffInDays < 7) {
-    // Within a week - show day name
     return date.toLocaleDateString('en-US', { weekday: 'short' });
   } else {
-    // Older - show date
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -55,12 +51,11 @@ const formatMessageTime = (timestamp: string): string => {
   }
 };
 
-// Convert API response to ConversationList format
 const convertToConversationFormat = (apiConversation: ConversationResponse): Conversation => {
   return {
     id: apiConversation.id.toString(),
     name: apiConversation.display_name,
-    profileImage: null, // You can add avatar URLs later
+    profileImage: null,
     lastMessage: apiConversation.latest_message?.content || 'No messages yet',
     sender: apiConversation.latest_message?.sender_name || '',
     messageTime: apiConversation.latest_message
@@ -87,7 +82,7 @@ export default function GroupScreen() {
     setError(null);
 
     const result = await withAuthErrorHandling(async () => {
-      const response = await fetchConversations(true); // true = Groups only
+      const response = await fetchConversations(true);
       return response;
     });
 
@@ -95,7 +90,6 @@ export default function GroupScreen() {
       const formattedConversations = result.results.map(convertToConversationFormat);
       setConversations(formattedConversations);
 
-      // Cache conversations for search
       try {
         await cacheConversations(formattedConversations, 'group');
       } catch (cacheError) {
@@ -113,7 +107,6 @@ export default function GroupScreen() {
     loadConversations();
   }, [loadConversations]);
 
-  // WebSocket for real-time conversation updates
   useEffect(() => {
     conversationsWebSocketService.connect().catch(console.error);
 
@@ -142,7 +135,6 @@ export default function GroupScreen() {
           conv.latest_message?.content
         );
 
-        // Skip DM conversations in Group screen
         if (!conv.is_group) {
           console.log('[Group] Skipping DM conversation');
           return;
@@ -151,12 +143,10 @@ export default function GroupScreen() {
         setConversations((prev) => {
           const idx = prev.findIndex((c) => c.id === conv.id.toString());
 
-          // If conversation exists, update it
           if (idx >= 0) {
             const updated = [...prev];
             const [existing] = updated.splice(idx, 1);
 
-            // Update with new message if available
             const updatedConv = {
               ...existing,
               lastMessage: conv.latest_message?.content || existing.lastMessage,
@@ -168,12 +158,10 @@ export default function GroupScreen() {
               unreadCount: (existing.unreadCount || 0) + 1,
             };
 
-            // Move to top
             updated.unshift(updatedConv);
             return updated;
           }
 
-          // If conversation doesn't exist yet, add it (new conversation)
           if (conv.latest_message) {
             const newConv = convertToConversationFormat({
               ...conv,
@@ -200,7 +188,6 @@ export default function GroupScreen() {
     };
   }, []);
 
-  // Refresh conversations when screen comes into focus
   useFocusEffect(
     useCallback(() => {
       if (conversationsWebSocketService.isConnected()) {
@@ -219,12 +206,10 @@ export default function GroupScreen() {
 
   const handleDeleteConversations = async (ids: string[]) => {
     const result = await withAuthErrorHandling(async () => {
-      // Delete conversations from backend
       await Promise.all(ids.map((id) => deleteConversation(parseInt(id))));
     });
 
     if (result !== null) {
-      // Update local state
       setConversations((prev) => prev.filter((c) => !ids.includes(c.id)));
     } else {
       setError('Failed to delete conversations');
@@ -232,7 +217,6 @@ export default function GroupScreen() {
   };
 
   const handleConversationPress = (conversation: Conversation) => {
-    // Optimistically update the unread count to 0 when opening a conversation
     setConversations((prev) =>
       prev.map((conv) =>
         conv.id === conversation.id ? { ...conv, unreadCount: 0, status: 'read' as const } : conv
@@ -253,7 +237,6 @@ export default function GroupScreen() {
     router.push('/add');
   };
 
-  // Loading state
   if (loading) {
     return (
       <SafeAreaView className="flex-1 bg-black" edges={['top', 'bottom']}>
@@ -266,7 +249,6 @@ export default function GroupScreen() {
     );
   }
 
-  // Error state
   if (error) {
     return (
       <SafeAreaView className="flex-1 bg-black" edges={['top', 'bottom']}>

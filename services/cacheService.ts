@@ -1,13 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Conversation } from 'components/ConversationList';
 
-// Cache keys
 const CONVERSATIONS_CACHE_KEY = 'conversations_cache';
 const MESSAGES_CACHE_KEY = 'messages_search_cache';
 
 export interface CachedConversation extends Conversation {
   type: 'dm' | 'group';
-  participants?: string[]; // For searching by participant names
+  participants?: string[];
 }
 
 export interface CachedMessage {
@@ -34,16 +33,13 @@ export const cacheConversations = async (
   type: 'dm' | 'group'
 ): Promise<void> => {
   try {
-    // Get existing cache
     const existingCacheStr = await AsyncStorage.getItem(CONVERSATIONS_CACHE_KEY);
     const existingCache: CachedConversation[] = existingCacheStr
       ? JSON.parse(existingCacheStr)
       : [];
 
-    // Remove old conversations of this type
     const filteredCache = existingCache.filter((c) => c.type !== type);
 
-    // Add new conversations with type
     const newConversations: CachedConversation[] = conversations.map((conv) => ({
       ...conv,
       type,
@@ -74,14 +70,11 @@ export const cacheMessagesForSearch = async (
   type: 'dm' | 'group'
 ): Promise<void> => {
   try {
-    // Get existing cache
     const existingCacheStr = await AsyncStorage.getItem(MESSAGES_CACHE_KEY);
     const existingCache: CachedMessage[] = existingCacheStr ? JSON.parse(existingCacheStr) : [];
 
-    // Remove old messages for this conversation
     const filteredCache = existingCache.filter((m) => m.conversationId !== conversationId);
 
-    // Add new messages
     const newMessages: CachedMessage[] = messages.map((msg) => ({
       ...msg,
       conversationId,
@@ -89,7 +82,6 @@ export const cacheMessagesForSearch = async (
       type,
     }));
 
-    // Limit cache size (keep last 1000 messages total)
     const updatedCache = [...filteredCache, ...newMessages].slice(-1000);
 
     await AsyncStorage.setItem(MESSAGES_CACHE_KEY, JSON.stringify(updatedCache));
@@ -112,17 +104,14 @@ export const searchCache = async (query: string): Promise<SearchResult> => {
 
     const lowerQuery = query.toLowerCase().trim();
 
-    // Get cached conversations
     const conversationsCacheStr = await AsyncStorage.getItem(CONVERSATIONS_CACHE_KEY);
     const conversationsCache: CachedConversation[] = conversationsCacheStr
       ? JSON.parse(conversationsCacheStr)
       : [];
 
-    // Get cached messages
     const messagesCacheStr = await AsyncStorage.getItem(MESSAGES_CACHE_KEY);
     const messagesCache: CachedMessage[] = messagesCacheStr ? JSON.parse(messagesCacheStr) : [];
 
-    // Search conversations
     const matchedConversations = conversationsCache.filter((conv) => {
       const nameMatch = conv.name.toLowerCase().includes(lowerQuery);
       const messageMatch = conv.lastMessage.toLowerCase().includes(lowerQuery);
@@ -130,7 +119,6 @@ export const searchCache = async (query: string): Promise<SearchResult> => {
       return nameMatch || messageMatch || senderMatch;
     });
 
-    // Search messages
     const matchedMessages = messagesCache.filter((msg) => {
       const contentMatch = msg.content.toLowerCase().includes(lowerQuery);
       const senderMatch = msg.senderName.toLowerCase().includes(lowerQuery);
@@ -138,7 +126,6 @@ export const searchCache = async (query: string): Promise<SearchResult> => {
       return contentMatch || senderMatch || conversationMatch;
     });
 
-    // Sort by relevance (exact matches first, then partial)
     const sortedConversations = matchedConversations.sort((a, b) => {
       const aExact = a.name.toLowerCase() === lowerQuery;
       const bExact = b.name.toLowerCase() === lowerQuery;
@@ -154,7 +141,7 @@ export const searchCache = async (query: string): Promise<SearchResult> => {
 
     return {
       conversations: sortedConversations,
-      messages: matchedMessages.slice(0, 50), // Limit to 50 messages
+      messages: matchedMessages.slice(0, 50),
     };
   } catch (error) {
     console.error('[cacheService] Error searching cache:', error);

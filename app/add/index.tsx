@@ -42,28 +42,24 @@ export default function SearchUsersScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  // Search and users state
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingAllUsers, setLoadingAllUsers] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Cached current user id (used to filter out current user from lists/search)
+
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
 
-  // Selection and group creation state
   const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [creatingChat, setCreatingChat] = useState<number | null>(null);
 
-  // UI state
   const [viewMode, setViewMode] = useState<ViewMode>('browse');
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load current profile & all users on mount (inline to avoid effect dependency on loadAllUsers)
   useEffect(() => {
     (async () => {
       const profile = await withAuthErrorHandling<UserProfileResponse>(async () => {
@@ -75,7 +71,6 @@ export default function SearchUsersScreen() {
         setCurrentUserId(idFromProfile != null ? Number(idFromProfile) : null);
       }
 
-      // Load and filter users (filtering out current user)
       setLoadingAllUsers(true);
       setError(null);
 
@@ -110,7 +105,7 @@ export default function SearchUsersScreen() {
 
     const result = await withAuthErrorHandling(async () => {
       const responses: UserSearchResponse = await getAllUsers();
-      // Try to use cached current user id if available to avoid extra fetch
+
       let cuId = currentUserId;
       if (cuId == null) {
         const currentUser = await getCurrentUserProfile();
@@ -119,7 +114,7 @@ export default function SearchUsersScreen() {
         setCurrentUserId(cuId);
       }
       const filteredUsers = responses.users.filter((response) => Number(response.id) !== cuId);
-      // return the full shaped response but with filtered users
+
       return { ...responses, users: filteredUsers, count: filteredUsers.length };
     });
 
@@ -142,7 +137,6 @@ export default function SearchUsersScreen() {
     });
 
     if (result) {
-      // Filter out current user (use cached id if available)
       let cuId = currentUserId;
       if (cuId == null) {
         const currentUser = await getCurrentUserProfile();
@@ -153,7 +147,7 @@ export default function SearchUsersScreen() {
       const filtered = result.users.filter((u) => Number(u.id) !== cuId);
       setSearchResults(filtered);
       if (filtered.length === 0) {
-        setError(null); // Will show "No Users Found" state
+        setError(null);
       }
     } else {
       setError('Failed to search users. Please try again.');
@@ -165,7 +159,6 @@ export default function SearchUsersScreen() {
   const handleSearch = (query: string) => {
     setSearchQuery(query);
 
-    // Clear previous timeout
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
@@ -178,17 +171,14 @@ export default function SearchUsersScreen() {
       return;
     }
 
-    // Switch to search mode
     setViewMode('search');
     setLoading(true);
 
-    // Debounce search - wait 500ms after user stops typing
     searchTimeoutRef.current = setTimeout(() => {
       performSearch(query);
     }, 500);
   };
 
-  // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
       if (searchTimeoutRef.current) {
@@ -198,7 +188,6 @@ export default function SearchUsersScreen() {
   }, []);
 
   const handleUserPress = async (user: User) => {
-    // If no users selected, create DM immediately
     if (selectedUsers.length === 0) {
       setCreatingChat(user.id);
       console.log('Creating DM conversation with user:', user);
@@ -230,10 +219,8 @@ export default function SearchUsersScreen() {
     const isSelected = selectedUsers.some((u) => u.id === user.id);
 
     if (isSelected) {
-      // Remove from selection
       setSelectedUsers((prev) => prev.filter((u) => u.id !== user.id));
     } else {
-      // Add to selection
       setSelectedUsers((prev) => [...prev, user]);
     }
   };

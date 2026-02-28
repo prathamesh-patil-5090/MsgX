@@ -1,8 +1,6 @@
 import { ConversationResponse } from './conversationsApi';
 import { getAccessToken } from './loginApi';
 
-// ---- Event types received from the server ----
-
 export interface InitialConversationsEvent {
   type: 'initial_conversations';
   conversations: ConversationResponse[];
@@ -52,7 +50,6 @@ class ConversationsWebSocketService {
       return;
     }
 
-    // If a connection is already in progress, don't create another
     if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
       console.log('[ConversationsWS] Connection already in progress');
       return;
@@ -82,7 +79,7 @@ class ConversationsWebSocketService {
     this.ws.onmessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'pong') return; // ignore keep-alive responses
+        if (data.type === 'pong') return;
         this.eventHandlers.forEach((handler) => handler(data as ConversationsWSEvent));
       } catch (err) {
         console.error('[ConversationsWS] Failed to parse message:', err);
@@ -143,8 +140,6 @@ class ConversationsWebSocketService {
   isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
-
-  // ---- internals ----
 
   private _startPing(): void {
     this._stopPing();

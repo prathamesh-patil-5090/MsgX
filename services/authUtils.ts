@@ -8,19 +8,21 @@ import { clearTokens } from './loginApi';
  * @param showAlert - Whether to show an alert to the user
  * @returns true if the error was an authentication error, false otherwise
  */
-export const handleAuthError = async (error: unknown, showAlert: boolean = true): Promise<boolean> => {
+export const handleAuthError = async (
+  error: unknown,
+  showAlert: boolean = true
+): Promise<boolean> => {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
-  // Check if it's an authentication error
-  const isAuthError = errorMessage.includes('Authentication expired') ||
-                     errorMessage.includes('Authentication required') ||
-                     errorMessage.includes('Invalid token') ||
-                     errorMessage.includes('Token expired');
+  const isAuthError =
+    errorMessage.includes('Authentication expired') ||
+    errorMessage.includes('Authentication required') ||
+    errorMessage.includes('Invalid token') ||
+    errorMessage.includes('Token expired');
 
   if (isAuthError) {
     console.log('[AuthUtils] Authentication error detected, redirecting to login');
 
-    // Clear any stored tokens
     try {
       await clearTokens();
     } catch (clearError) {
@@ -42,7 +44,6 @@ export const handleAuthError = async (error: unknown, showAlert: boolean = true)
         { cancelable: false }
       );
     } else {
-      // Redirect without alert
       router.replace('/login');
     }
 
@@ -70,11 +71,9 @@ export const withAuthErrorHandling = async <T>(
     const wasAuthError = await handleAuthError(error, showAlert);
 
     if (wasAuthError) {
-      // Return null for auth errors after handling
       return null;
     }
 
-    // Re-throw non-auth errors
     throw error;
   }
 };
